@@ -1,0 +1,51 @@
+rules_version = '2';
+
+// Règles d'accès du site « Suivi Top 3 équipe » (version 2.0).
+// À coller dans la console Firebase : Firestore Database > Règles > Publier.
+//
+// Principe : aucun compte. Le site se connecte de façon anonyme, et une équipe n'est accessible
+// qu'avec son identifiant secret de 24 caractères (contenu dans le lien de l'équipe).
+// Personne ne peut lister les équipes ; rien ne peut être supprimé depuis le site.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function teamExists(team) {
+      return exists(/databases/$(database)/documents/teams/$(team));
+    }
+    function okEvent() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['id', 'ts', 'by', 't', 'w', 'm', 'f', 'v'])
+        && d.id is string && d.id.size() <= 40
+        && d.ts is number
+        && d.t in ['f', 'm', 'a', 'c']
+        && (!('by' in d) || (d.by is string && d.by.size() <= 80))
+        && (!('v' in d) || d.v == null || (d.v is string && d.v.size() <= 600) || d.v is map);
+    }
+
+    match /teams/{team} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && team.size() >= 20
+        && request.resource.data.keys().hasOnly(['name', 'created', 'by'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 60;
+      allow update, delete: if false;
+
+      match /{coll}/{item} {
+        allow read: if signedIn()
+          && coll in ['members', 'actions', 'config', 'cells']
+          && teamExists(team);
+        allow create, update: if signedIn()
+          && coll in ['members', 'actions', 'config', 'cells']
+          && teamExists(team)
+          && okEvent();
+        allow delete: if false;
+      }
+    }
+  }
+}

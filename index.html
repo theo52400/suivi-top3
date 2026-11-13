@@ -1,0 +1,1639 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suivi Top 3 équipe</title>
+<!--
+NOTE DE STRUCTURE (M11)
+Appli      : Suivi Top 3 équipe · version 2.0 (site web) · PE Batilly - PE Logistique
+Fichiers   : index.html (ce site, hébergé sur GitHub Pages) + firestore.rules + README.md (mise en ligne).
+Stockage   : base Firebase Firestore (temps réel, cache hors ligne sur chaque appareil) ; connexion anonyme
+             automatique, aucun compte à créer. Réglages propres à l'appareil : localStorage « top3_* ».
+Accès      : une équipe = un identifiant secret de 24 caractères dans le lien (…/#t=XXXX). Sans ce lien,
+             personne ne peut lire ni écrire (règles Firestore : pas de liste des équipes).
+Données    : un document par case ; la dernière saisie remplace la précédente.
+             teams/{équipe} {name, created, by} · members/{id} t:"m" {name,email,order} | null
+             actions/{id} t:"a" {text,owner,week,day,done,first,created} | null · config/{clé} t:"c" (deadline, samedi)
+             cells/{lundi}_{membre}_{champ} t:"f" : f = t1-3 objectif, j1-3 jours prévus, d1-3 atteint,
+             s1-6 présence, p1-6 priorité du jour ; lu semaine par semaine (where w == lundi).
+             Format d'événement identique aux versions 1.x : une sauvegarde 1.x se restaure dans le site.
+Règles     : une case est en rouge si elle est vide après l'heure limite (9h30 par défaut) un jour travaillé
+             (Présent, Télétravail, Déplacement). Un objectif du Top 3 écrit et prévu ce jour-là compte comme priorité
+             du jour. Jours fériés : Code du travail, art. L3133-1 ; Pâques calculé (algorithme de Meeus).
+             Action en retard : jour prévu passé (ou samedi passé si sans jour), non faite.
+Sorties    : sauvegardes JSON et exports CSV dans Téléchargements.
+Tests      : ⚙ > Réglages avancés > Auto-contrôle (8 tests de l'appli). Tests du socle du gabarit v1.5 : gabarit non fourni.
+Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (13/11/2026) site web Firebase + GitHub Pages,
+             sans compte, temps réel, téléphone.
+-->
+<style>
+/* Rendu du service (chapitre R du standard) : barre du haut, cadre à coins coupés, titres à carré jaune. */
+:root{
+  /* code couleur des présences : liseré (st) et teinte de la case (tt) */
+  --st-present:#1E9E5A; --st-tele:#0047FF; --st-dep:#139E86; --st-form:#B57F0E; --st-conge:#E3870B; --st-abs:#D23B2F; --st-repos:#7A818B; --st-ferie:#5B616B;
+  --tt-tele:#E6EDFF; --tt-dep:#E0F3EF; --tt-form:#F5EDDB; --tt-conge:#FDEBD3; --tt-abs:#FBE7E5; --tt-off:#ECEEF1;
+  --ink:#1C1F24; --text:#30353C; --gray:#5B616B; --line:#CDD2D9; --yellow:#FFCC33; --on-yellow:#1C1F24;
+  --block:#F2F4F6; --page:#E9ECEF; --card:#FFFFFF; --field:#7A818B;
+  --green:#1E9E5A; --orange:#E3870B; --red:#D23B2F;
+  --t-green:#1E7A47; --t-orange:#9A5A00; --t-red:#B32A20;
+  --tint-y:#FFF5D6; --tint-g:#E3F4EA; --tint-o:#FDEBD3; --tint-r:#FBE7E5;
+  --head-bg:#1C1F24; --head-fg:#FFFFFF; --shade:rgba(0,0,0,.55);
+  --font:Aptos,Calibri,"Segoe UI",Arial,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --ink:#F2F4F6; --text:#DDE1E6; --gray:#A9B0BA; --line:#3A4048; --block:#23272D; --page:#121417; --card:#1A1D21; --field:#7D848E;
+  --t-green:#4CC98A; --t-orange:#F5A524; --t-red:#FF7B70;
+  --tint-y:#3A3114; --tint-g:#16301F; --tint-o:#3A2A14; --tint-r:#3B1D1B;
+  --head-bg:#2B3037; --shade:rgba(0,0,0,.65); color-scheme:dark;
+  --st-tele:#5B8CFF; --st-dep:#1E9C84; --st-form:#C9952F; --st-repos:#7D848E; --st-ferie:#A9B0BA;
+  --tt-tele:#17213D; --tt-dep:#0F2B26; --tt-form:#2E2512; --tt-conge:#3A2A14; --tt-abs:#3B1D1B; --tt-off:#23272D}}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--page);color:var(--text);font:11pt/1.45 var(--font);font-variant-numeric:tabular-nums}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--yellow);outline-offset:2px}
+[hidden]{display:none!important}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* barre du haut */
+.appbar{position:sticky;top:0;z-index:30;background:var(--card);border-bottom:1px solid var(--line)}
+.appbar .in{max-width:1120px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap}
+.appname{font-size:14pt;font-weight:700;color:var(--ink);line-height:1.15}
+.appver{font-size:9.5pt;color:var(--gray)}
+.appbar .grow{flex:1}
+.state{display:inline-flex;align-items:center;gap:7px;font-size:9.5pt;color:var(--gray);background:none;border:0;cursor:pointer;padding:6px;border-radius:4px}
+.state:hover{background:var(--block)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--orange);flex:none}
+.dot.ok{background:var(--green)} .dot.bad{background:var(--red)}
+
+/* boutons */
+.btn{height:40px;padding:0 14px;border:1.5px solid var(--ink);border-radius:4px;background:var(--card);color:var(--ink);font-weight:700;font-size:10.5pt;display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;white-space:nowrap;text-decoration:none}
+.btn:hover{background:var(--block)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--yellow);color:var(--on-yellow);border-color:var(--ink)}
+.btn.primary:hover{filter:brightness(.96)}
+.btn.sm{height:32px;padding:0 10px;font-size:10pt}
+.btn.icon{width:40px;padding:0}
+.btn.sm.icon{width:32px}
+.btn.danger{color:var(--t-red);border-color:var(--red)}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.ghost:hover{background:var(--block)}
+.pastille{min-width:20px;height:20px;border-radius:10px;background:#1C1F24;color:#FFCC33;font-size:9pt;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 6px}
+
+/* bandeau unique */
+#banner{display:none}
+#banner.on{display:block}
+#banner .in{max-width:1120px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;font-weight:600}
+#banner .grow{flex:1}
+#banner.b-red{background:var(--tint-r);border-bottom:2px solid var(--red)}
+#banner.b-orange{background:#E3870B;color:#1C1F24}
+#banner.b-orange .btn{background:#FFFFFF;color:#1C1F24;border-color:#1C1F24}
+#banner.b-yellow{background:var(--tint-y);border-bottom:2px solid var(--yellow)}
+
+/* page */
+.page{max-width:1120px;margin:0 auto;padding:16px 16px 72px}
+.toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 14px;margin-bottom:14px}
+.tabs{display:flex;gap:2px;overflow-x:auto;flex:1 1 360px;min-width:0;border-bottom:1px solid var(--line);scrollbar-width:thin}
+.tab{height:42px;padding:0 12px;border:0;border-bottom:3px solid transparent;background:none;font-weight:700;font-size:10.5pt;color:var(--gray);cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.tab:hover{color:var(--ink)}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--yellow)}
+.av{width:24px;height:24px;border-radius:50%;background:var(--block);border:1px solid var(--line);color:var(--ink);font-size:8.5pt;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex:none}
+.av.me{background:var(--yellow);border-color:var(--yellow);color:#1C1F24}
+.cnt{min-width:18px;height:18px;border-radius:9px;background:var(--red);color:#fff;font-size:8.5pt;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}
+.tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.weeknav{display:flex;align-items:center;gap:6px}
+.wkbadge{height:30px;min-width:44px;padding:0 6px;background:#1C1F24;color:#FFCC33;font-weight:700;display:inline-flex;align-items:center;justify-content:center;border-radius:2px}
+.range{font-size:10pt;color:var(--gray);white-space:nowrap}
+.popwrap{position:relative}
+.pop{position:absolute;right:0;top:calc(100% + 6px);z-index:40;background:var(--card);border:1.5px solid var(--ink);border-radius:4px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:12px;width:270px;display:flex;flex-direction:column;gap:8px}
+.pop .row{display:flex;gap:6px;flex-wrap:wrap}
+.pop label{display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer}
+.pop input[type=checkbox]{width:18px;height:18px;accent-color:#1C1F24}
+
+/* cadre à coins coupés */
+.frame{position:relative;background:var(--ink);padding:1px;clip-path:polygon(16px 0,calc(100% - 16px) 0,100% 16px,100% calc(100% - 16px),calc(100% - 16px) 100%,16px 100%,0 calc(100% - 16px),0 16px)}
+.frame>.fin{position:relative;background:var(--card);padding:20px 24px 28px;clip-path:polygon(15.4px 0,calc(100% - 15.4px) 0,100% 15.4px,100% calc(100% - 15.4px),calc(100% - 15.4px) 100%,15.4px 100%,0 calc(100% - 15.4px),0 15.4px)}
+.frame>.fin::before{content:"";position:absolute;top:0;left:16px;width:140px;height:5px;background:var(--yellow)}
+@media (max-width:600px){.frame>.fin{padding:18px 14px 22px}}
+
+/* titres de section */
+.sec{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-size:11.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--ink)}
+.sec::before{content:"";width:12px;height:12px;background:var(--yellow);flex:none}
+.sec .fil{flex:1;height:1px;background:var(--line);min-width:20px}
+.sec .meta{font-size:9.5pt;font-weight:400;letter-spacing:0;text-transform:none;color:var(--gray)}
+.blk+.blk{margin-top:26px}
+@media (max-width:600px){.sec .meta{display:none}.sec{letter-spacing:.08em}}
+
+/* tuiles */
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:22px}
+.tile{background:var(--block);border:0;border-top:3px solid var(--yellow);padding:10px 14px;text-align:left;color:inherit;font:inherit}
+button.tile{cursor:pointer}
+button.tile:hover{filter:brightness(.98)}
+.tile .v{font-size:20pt;font-weight:700;color:var(--ink);line-height:1.1}
+.tile .l{font-size:10pt;color:var(--gray)}
+.tile.ok{border-top-color:var(--green)} .tile.warn{border-top-color:var(--orange)} .tile.bad{border-top-color:var(--red)}
+@media (max-width:760px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* étiquettes d'état */
+.et{display:inline-flex;align-items:center;gap:4px;font-size:9.5pt;font-weight:700;border-radius:3px;padding:1px 7px;white-space:nowrap;line-height:1.5}
+.et.ok{background:#1E9E5A;color:#fff}
+.et.warn{background:#E3870B;color:#1C1F24}
+.et.bad{background:#D23B2F;color:#fff}
+.et.neu{background:var(--block);color:var(--gray);box-shadow:inset 0 0 0 1px var(--line)}
+
+/* tableau équipe */
+.board-scroll{overflow-x:auto;border:1px solid var(--line)}
+table.board{border-collapse:separate;border-spacing:0;width:100%;font-size:10.5pt}
+.board th,.board td{border-bottom:1px solid var(--line);border-left:1px solid var(--line);vertical-align:top;text-align:left;padding:0}
+.board tr>*:first-child{border-left:0}
+.board tbody tr:last-child>*{border-bottom:0}
+.board thead th{background:var(--head-bg);color:var(--head-fg)}
+.board .rh{position:sticky;left:0;z-index:2;background:var(--card);width:112px;min-width:104px;padding:10px 12px;border-right:1px solid var(--line)}
+.board thead .rh{background:var(--head-bg);z-index:3;vertical-align:bottom}
+.rh .d{display:block;font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:10pt;color:var(--ink)}
+.rh .dt{display:block;font-size:9pt;color:var(--gray)}
+.rh .tg{display:inline-block;margin-top:6px;font-size:8.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.06em;background:var(--yellow);color:#1C1F24;padding:0 5px;border-radius:2px}
+.rh .ho{display:block;margin-top:4px;font-size:9pt;color:var(--gray);font-style:italic}
+.board .ph{min-width:230px;padding:10px 10px 10px 12px}
+.ph .top{display:flex;align-items:flex-start;gap:6px}
+.ph .nm{flex:1;min-width:0;background:none;border:0;padding:0;color:inherit;text-align:left;cursor:pointer;font-weight:700;font-size:10pt;text-transform:uppercase;letter-spacing:.06em;overflow-wrap:anywhere}
+.ph .nm:hover{text-decoration:underline}
+.ph .x{background:none;border:1px solid rgba(255,255,255,.35);color:inherit;width:26px;height:26px;border-radius:3px;cursor:pointer;flex:none;font-size:11pt;line-height:1}
+.ph .x:hover{border-color:#FFCC33}
+.ph .st{margin-top:6px}
+.ph.me{box-shadow:inset 0 -4px 0 #FFCC33}
+tr.today>td,tr.today>.rh{background:var(--tint-y)}
+tr.off>td{background:var(--block)}
+td.c{min-width:230px}
+.cell{display:flex;flex-direction:column;gap:6px;padding:8px 10px}
+.board td.off-cell{background:var(--block)}
+td.miss .case{border-color:var(--red);background:var(--tint-r)}
+
+/* champs */
+.inp{height:40px;width:100%;border:1px solid var(--field);border-radius:3px;padding:0 10px;background:var(--card);color:var(--text)}
+.case{display:block;width:100%;min-height:40px;resize:none;overflow:hidden;border:1px solid var(--field);border-radius:3px;padding:9px 10px;background:var(--card);color:var(--text);line-height:1.35;field-sizing:content}
+.case::placeholder,.inp::placeholder{color:var(--gray);opacity:.75}
+.obj.empty.need{border-color:var(--red);background:var(--tint-r)}
+/* présences : une couleur par statut (le texte reste toujours écrit) */
+[data-st="Présent"]{--stc:var(--st-present);--stt:transparent}
+[data-st="Télétravail"]{--stc:var(--st-tele);--stt:var(--tt-tele)}
+[data-st="Déplacement"]{--stc:var(--st-dep);--stt:var(--tt-dep)}
+[data-st="Formation"]{--stc:var(--st-form);--stt:var(--tt-form)}
+[data-st="Congé"]{--stc:var(--st-conge);--stt:var(--tt-conge)}
+[data-st="Absent"]{--stc:var(--st-abs);--stt:var(--tt-abs)}
+[data-st="Repos"]{--stc:var(--st-repos);--stt:var(--tt-off)}
+[data-st="Férié"]{--stc:var(--st-ferie);--stt:var(--tt-off)}
+select.pres{align-self:flex-start;height:26px;font-size:9.5pt;font-weight:700;border:1px solid var(--line);border-left:5px solid var(--stc,var(--line));border-radius:3px;background:var(--card);color:var(--ink);padding:0 4px;cursor:pointer;max-width:100%}
+body.pres-on .board td.c[data-st]{box-shadow:inset 4px 0 0 var(--stc)}
+body.pres-on .board td.c[data-st]:not([data-st="Présent"]){background:var(--stt)}
+body.pres-on .daycard[data-st]{box-shadow:inset 4px 0 0 var(--stc)}
+body.pres-on .daycard[data-st]:not([data-st="Présent"]){background:var(--stt)}
+body:not(.pres-on) select.pres,body:not(.pres-on) .legend{display:none}
+.legend{display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px;font-size:9.5pt;color:var(--gray);margin:0 0 12px}
+.legend .lt{font-weight:700;text-transform:uppercase;letter-spacing:.08em;font-size:9pt;color:var(--ink)}
+.legend .lg{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.legend .lg::before{content:"";width:12px;height:12px;border-radius:2px;background:var(--stc)}
+.legend .lg span{color:var(--text)}
+.btn[aria-pressed="false"]{border-style:dashed;color:var(--gray)}
+
+/* top 3 */
+.t3{display:flex;flex-direction:column;gap:10px;padding:10px}
+.t3row{display:grid;grid-template-columns:24px minmax(0,1fr);gap:6px 8px;align-items:start}
+.num{width:22px;height:22px;margin-top:9px;background:#1C1F24;color:#FFCC33;border:0;border-radius:2px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:10pt;cursor:pointer;padding:0}
+.num.done{background:#1E9E5A;color:#fff}
+@media (prefers-color-scheme: dark){.num,.pchip .n,.wkbadge,.step .sq{box-shadow:inset 0 0 0 1px #5B616B}}
+.t3row .inp{height:40px}
+.daypick{display:flex;gap:3px;margin-top:4px}
+.daypick label{position:relative;cursor:pointer}
+.daypick input{position:absolute;opacity:0;width:1px;height:1px}
+.daypick span{display:inline-flex;align-items:center;justify-content:center;width:23px;height:22px;border:1px solid var(--line);border-radius:3px;font-size:9pt;font-weight:700;color:var(--gray);background:transparent;user-select:none}
+.daypick label:hover span{border-color:var(--ink)}
+.daypick input:checked+span{background:var(--yellow);border-color:var(--yellow);color:#1C1F24}
+.daypick input:focus-visible+span{outline:3px solid var(--yellow);outline-offset:1px}
+.daypick span.today{box-shadow:inset 0 -2px 0 var(--ink)}
+
+/* éléments prévus dans un jour */
+.items{display:flex;flex-direction:column;gap:4px}
+.items:empty{display:none}
+.irow{display:flex;gap:6px;align-items:flex-start}
+.irow .items{flex:1;min-width:0}
+.pplus{flex:none;min-width:24px;height:24px;padding:0 6px;white-space:nowrap;border:1px dashed var(--field);border-radius:3px;background:transparent;color:var(--gray);font-size:13pt;font-weight:700;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.pplus:hover{border-style:solid;border-color:var(--ink);color:var(--ink);background:var(--card)}
+.pplus.need{height:28px;padding:0 10px;font-size:9.5pt;border:1px solid var(--red);background:var(--tint-r);color:var(--t-red)}
+.pplus.need:hover{border-color:var(--red);color:var(--t-red);background:var(--tint-r);filter:brightness(.97)}
+.pchip{display:flex;align-items:center;gap:7px;width:100%;min-width:0;background:var(--block);border:0;border-radius:3px;padding:3px 8px 3px 3px;font-size:9.5pt;color:var(--text);text-align:left;cursor:pointer}
+tr.today .pchip,.daycard.today .pchip{background:var(--card)}
+.pchip .n{width:18px;height:18px;flex:none;background:#1C1F24;color:#FFCC33;border-radius:2px;display:inline-flex;align-items:center;justify-content:center;font-size:8.5pt;font-weight:700}
+.pchip.done .n{background:#1E9E5A;color:#fff}
+.pchip .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pchip:hover .t{text-decoration:underline}
+.act{display:flex;align-items:flex-start;gap:7px;font-size:9.5pt;padding:2px 2px 2px 3px;border-radius:3px}
+.act[draggable="true"]{cursor:grab}
+.act input{flex:none;width:16px;height:16px;margin:2px 0 0;accent-color:#1E9E5A;cursor:pointer}
+.act .t{flex:1;min-width:0;background:none;border:0;padding:0;color:inherit;text-align:left;cursor:pointer;overflow-wrap:anywhere}
+.act .t:hover{text-decoration:underline}
+.act.done .t{text-decoration:line-through;color:var(--gray)}
+.act.late .t{color:var(--t-red);font-weight:600}
+.more{align-self:flex-start;background:none;border:0;padding:0;font-size:9pt;color:var(--gray);text-decoration:underline;cursor:pointer}
+.drop-over{outline:2px dashed var(--ink);outline-offset:-4px;background:var(--tint-y)!important}
+body.dragging [data-drop]{outline:1px dashed var(--field);outline-offset:-4px}
+
+/* vue personne */
+.pv-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-bottom:22px}
+.pv-head .av{width:40px;height:40px;font-size:12pt}
+.pv-head .who{display:flex;flex-direction:column}
+.pv-head .big{font-size:16pt;font-weight:700;color:var(--ink);line-height:1.1}
+.pv-head .sub{font-size:10pt;color:var(--gray)}
+.pv-head .grow{flex:1}
+.tops{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.topcard{background:var(--block);border-top:3px solid var(--yellow);padding:12px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.topcard.done{border-top-color:var(--green)}
+.topcard.need{border-top-color:var(--red)}
+.topcard .hd{display:flex;align-items:center;gap:8px}
+.topcard .hd .num{margin:0}
+.topcard .hd .lb{font-size:9.5pt;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;flex:1}
+.chk{display:inline-flex;align-items:center;gap:6px;font-size:9.5pt;font-weight:700;color:var(--gray);cursor:pointer}
+.chk input{width:16px;height:16px;accent-color:#1E9E5A}
+.week6{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.week6.five{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media (max-width:1000px){.week6,.week6.five{grid-template-columns:repeat(3,minmax(0,1fr))}.tops{grid-template-columns:1fr}}
+@media (max-width:620px){.week6,.week6.five{grid-template-columns:1fr}}
+.daycard{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--line);padding:10px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.daycard.today{border-top-color:var(--yellow);background:var(--tint-y)}
+.daycard.off-cell{background:var(--block)}
+.daycard.miss{border-top-color:var(--red)}
+.daycard.miss .case{border-color:var(--red);background:var(--tint-r)}
+.dc-h{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.dc-h .d{font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:.06em;font-size:10pt}
+.dc-h .dt{font-size:9pt;color:var(--gray)}
+.dc-row{display:flex;gap:6px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.offtxt{font-size:9.5pt;color:var(--gray);font-style:italic}
+.addline{align-self:stretch;font-size:9.5pt;color:var(--gray);background:none;border:1px dashed var(--line);border-radius:3px;padding:5px 8px;cursor:pointer;text-align:left}
+.addline:hover{border-color:var(--ink);color:var(--ink)}
+.addinp{height:32px;font-size:9.5pt}
+.linkbtn{background:none;border:0;padding:0;font-size:9pt;color:var(--gray);text-decoration:underline;cursor:pointer}
+.linkbtn:hover{color:var(--ink)}
+
+/* actions en attente */
+.alist{display:flex;flex-direction:column}
+.aitem{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:4px 10px;align-items:start;padding:9px 2px;border-bottom:1px solid var(--line)}
+.aitem:last-child{border-bottom:0}
+.aitem[draggable="true"]{cursor:grab}
+.aitem input[type=checkbox]{width:16px;height:16px;margin:3px 0 0;accent-color:#1E9E5A;cursor:pointer}
+.aitem .t{background:none;border:0;padding:0;text-align:left;color:var(--text);cursor:pointer;font-weight:600;overflow-wrap:anywhere}
+.aitem .t:hover{text-decoration:underline}
+.aitem .meta{grid-column:2;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:9pt;color:var(--gray)}
+.aitem.done .t{text-decoration:line-through;color:var(--gray);font-weight:400}
+.agroup{margin-top:14px}
+.agroup:first-child{margin-top:0}
+.agroup h3{display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:9.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--gray)}
+.agroup[data-drop]{padding:4px;margin-left:-4px;margin-right:-4px}
+.empty-note{font-size:10pt;color:var(--gray);padding:6px 0}
+
+/* tiroir */
+#drawer{position:fixed;top:0;right:0;bottom:0;width:min(430px,100vw);background:var(--card);border-left:1.5px solid var(--ink);z-index:45;display:flex;flex-direction:column;box-shadow:-10px 0 30px rgba(0,0,0,.15)}
+#drawer::before{content:"";position:absolute;top:0;left:16px;width:120px;height:5px;background:var(--yellow)}
+.dr-head{display:flex;align-items:center;gap:8px;padding:18px 16px 12px;border-bottom:1px solid var(--line)}
+.dr-head h2{margin:0;font-size:13pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--ink);flex:1}
+.dr-tools{display:flex;gap:8px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--block)}
+.dr-tools .inp{flex:1 1 200px}
+.dr-tools select.inp{flex:0 1 150px}
+.dr-body{overflow:auto;padding:12px 16px 28px;flex:1}
+.hint{font-size:9.5pt;color:var(--gray);margin:0}
+
+/* fenêtres */
+#win-bg{position:fixed;inset:0;background:var(--shade);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:6vh 16px 16px;overflow:auto}
+.win{position:relative;background:var(--card);width:min(880px,100%);display:flex;flex-direction:column}
+.win.small{width:min(560px,100%)} .win.large{width:min(1100px,100%)}
+.win::before{content:"";position:absolute;top:0;left:16px;width:120px;height:5px;background:var(--yellow)}
+.win-head{display:flex;align-items:center;gap:10px;padding:20px 20px 10px 24px}
+.win-head h2{margin:0;flex:1;font-size:13pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--ink)}
+.win-body{padding:6px 24px 22px;display:flex;flex-direction:column;gap:18px}
+.win-body p{margin:0}
+.win-foot{background:var(--block);padding:12px 24px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.win-foot .sp{flex:1}
+@media (max-width:600px){#win-bg{padding:0}.win{min-height:100%}.win-body{padding:6px 16px 20px}.win-foot{padding:12px 16px}}
+.fld{display:flex;flex-direction:column;gap:5px}
+.fld .lb{font-weight:700;font-size:10pt;color:var(--ink)}
+.fld .help{font-size:10pt;color:var(--gray)}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{height:32px;padding:0 10px;border:1px solid var(--field);border-radius:3px;background:var(--card);font-size:10pt;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--yellow);border-color:var(--ink);color:#1C1F24;font-weight:700}
+.row2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+@media (max-width:600px){.row2{grid-template-columns:1fr}}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;font-size:10pt}
+.kv>span:nth-child(odd){color:var(--gray)}
+.tbl-wrap{overflow-x:auto}
+table.tbl{border-collapse:collapse;width:100%;font-size:10pt}
+.tbl th{background:var(--head-bg);color:var(--head-fg);font-size:9pt;text-transform:uppercase;letter-spacing:.06em;text-align:left;padding:7px 10px;font-weight:700}
+.tbl td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+.tbl tr:nth-child(even) td{background:var(--block)}
+.tbl td.r,.tbl th.r{text-align:right}
+.teamrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) auto;gap:8px;align-items:center}
+@media (max-width:640px){.teamrow{grid-template-columns:1fr}}
+.ops{display:flex;gap:4px}
+.help-doc h3{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:11pt;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink)}
+.help-doc h3::before{content:"";width:10px;height:10px;background:var(--yellow)}
+.help-doc ol,.help-doc ul{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px}
+.toc{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:10pt}
+.toc a{color:var(--ink)}
+details.adv{border-top:1px solid var(--line);padding-top:12px}
+details.adv summary{cursor:pointer;font-weight:700;color:var(--ink)}
+details.adv[open] summary{margin-bottom:14px}
+.tests li{list-style:none;display:flex;gap:8px;align-items:center}
+.tests{padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
+
+/* message bref, retour en haut */
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1C1F24;color:#fff;border-left:5px solid #FFCC33;padding:10px 16px;z-index:70;max-width:min(560px,92vw);box-shadow:0 8px 24px rgba(0,0,0,.25)}
+#toast.bad{border-left-color:#D23B2F}
+#totop{position:fixed;right:16px;bottom:16px;width:44px;height:44px;background:#1C1F24;color:#fff;border:2px solid #FFCC33;border-radius:4px;font-size:18pt;line-height:1;cursor:pointer;z-index:35}
+
+/* accueil */
+.steps{display:flex;flex-direction:column}
+.step{display:grid;grid-template-columns:40px minmax(0,1fr);gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.step:first-child{border-top:0}
+.step .sq{width:30px;height:30px;background:#1C1F24;color:#FFCC33;display:flex;align-items:center;justify-content:center;font-weight:700;border-radius:2px}
+.step.done .sq{background:#1E9E5A;color:#fff}
+.step h3{margin:0;font-size:11pt;color:var(--ink)}
+.step p{margin:2px 0 8px;color:var(--gray);max-width:75ch}
+.step.done p,.step.done .btn{display:none}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header class="appbar">
+  <div class="in">
+    <div>
+      <div class="appname">Suivi Top 3 équipe</div>
+      <div class="appver" id="appver">Version 2.0 · PE Batilly - PE Logistique</div>
+    </div>
+    <span class="grow"></span>
+    <button class="state" id="state" type="button"><span class="dot"></span><span class="txt">Connexion…</span></button>
+    <button class="btn primary" id="diffuser" type="button">Diffuser <span class="pastille" id="pastille" hidden>0</span></button>
+    <button class="btn" id="aide" type="button">Aide</button>
+    <button class="btn icon" id="reglages" type="button" aria-label="Paramètres" title="Paramètres">⚙</button>
+  </div>
+</header>
+<div id="banner" role="status"></div>
+
+<main class="page">
+  <div class="toolbar">
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Vues"></nav>
+    <div class="tools">
+      <div class="weeknav" aria-label="Semaine affichée">
+        <button class="btn sm icon" id="prev" type="button" aria-label="Semaine précédente">‹</button>
+        <span class="wkbadge" id="wk">S--</span>
+        <button class="btn sm icon" id="next" type="button" aria-label="Semaine suivante">›</button>
+        <span class="range" id="range"></span>
+        <button class="btn sm" id="thisweek" type="button">Aujourd'hui</button>
+      </div>
+      <button class="btn sm" id="prestoggle" type="button" aria-pressed="true" title="Afficher ou masquer les présences et leurs couleurs (sur cet appareil)">Masquer les présences</button>
+      <div class="popwrap">
+        <button class="btn sm" id="people" type="button" aria-haspopup="true" aria-expanded="false">Personnes</button>
+        <div class="pop" id="people-pop" hidden></div>
+      </div>
+      <button class="btn sm" id="pending" type="button">En attente</button>
+    </div>
+  </div>
+
+  <section class="frame"><div class="fin" id="view"></div></section>
+</main>
+
+<aside id="drawer" hidden aria-label="Actions en attente"></aside>
+<div id="win-bg" hidden></div>
+<div id="toast" hidden role="status"></div>
+<button id="totop" type="button" hidden aria-label="Retour en haut">↑</button>
+
+<script>
+"use strict";
+const APP = { name: "Suivi Top 3 équipe", ver: "2.0", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
+const NEWS = {
+  "2.0": ["Site web : on l'ouvre avec un lien, sur PC comme sur téléphone, sans compte ni dossier partagé.",
+    "Les saisies de l'équipe arrivent en direct, et l'appli marche hors ligne (envoi au retour du réseau).",
+    "Le lien de l'équipe se partage depuis ⚙ ; les relances Teams l'incluent."],
+  "1.5": ["Toutes les cases de priorité vides se replient en un petit « + » ; quand une priorité manque, il devient « + À remplir » en rouge."],
+  "1.4": ["Quand un Top est prévu ce jour-là, la case de priorité vide se replie en un petit « + » : un clic l'ouvre pour une autre priorité."],
+  "1.3": ["Un objectif du Top 3 prévu un jour compte comme priorité de ce jour : la case n'est plus rouge, elle reste disponible pour une autre priorité."],
+  "1.2": ["Code couleur des présences : un liseré par statut à gauche de chaque case, une teinte les jours non travaillés, une légende.",
+    "Bouton « Masquer les présences » pour alléger le tableau (réglage propre à ton PC ; les absences restent prises en compte)."],
+  "1.1": ["Un onglet par personne pour suivre son plan de la semaine.",
+    "Bouton « Personnes » pour masquer des colonnes et alléger le tableau.",
+    "Actions en attente : on les garde pour plus tard ou on les glisse sur un jour, cette semaine ou une autre.",
+    "La priorité du jour est une case simple ; l'objectif prévu ce jour-là s'affiche en étiquette.",
+    "Objectif « atteint », Diffuser (tout est prêt ?, relances, exports CSV), sauvegarde et restauration, exemple."],
+  "1.0": ["Tableau partagé par dossier Teams : présence, Top 3 avec jours, priorité du jour, relances."],
+};
+const NEWS_SHORT = "le suivi devient un site web : un lien, sans compte, sur PC et téléphone, saisies en direct";
+const STATUSES = ["Présent", "Télétravail", "Déplacement", "Formation", "Congé", "Absent", "Repos", "Férié"];
+const WORKING = new Set(["Présent", "Télétravail", "Déplacement"]);
+const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
+const DSHORT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+const LETTERS = ["L", "M", "M", "J", "V", "S"];
+const CFG_KEYS = ["deadline", "samedi"];
+
+/* ——————————— utilitaires ——————————— */
+const $ = (s) => document.querySelector(s);
+const pad = (n) => String(n).padStart(2, "0");
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parseYmd = (s) => new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const mondayOf = (d) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+const fmtDate = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+const fmtDM = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+const hhmm = (t) => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+function isoWeek(d) { const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day); const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)); return Math.ceil(((t - y0) / 864e5 + 1) / 7); }
+function easter(y) { const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451), mo = Math.floor((h + l - 7 * m + 114) / 31), da = ((h + l - 7 * m + 114) % 31) + 1; return new Date(y, mo - 1, da); }
+const holCache = {};
+function holidays(y) {
+  if (!holCache[y]) {
+    const e = easter(y);
+    holCache[y] = [[new Date(y, 0, 1), "Jour de l'an"], [addDays(e, 1), "Lundi de Pâques"], [new Date(y, 4, 1), "Fête du Travail"], [new Date(y, 4, 8), "Victoire 1945"], [addDays(e, 39), "Ascension"], [addDays(e, 50), "Lundi de Pentecôte"], [new Date(y, 6, 14), "Fête nationale"], [new Date(y, 7, 15), "Assomption"], [new Date(y, 10, 1), "Toussaint"], [new Date(y, 10, 11), "Armistice"], [new Date(y, 11, 25), "Noël"]];
+  }
+  return holCache[y];
+}
+function holidayName(d) { const k = ymd(d); const f = holidays(d.getFullYear()).find(([x]) => ymd(x) === k); return f ? f[1] : ""; }
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) { if (v === false || v == null) continue; if (k === "class") el.className = v; else el.setAttribute(k, v === true ? "" : v); }
+  for (const c of kids) if (c != null && c !== false) el.append(c);
+  return el;
+}
+const on = (el, ev, fn) => { el.addEventListener(ev, fn); return el; };
+function slug(s) { return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "anonyme"; }
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const firstName = (n) => String(n || "").trim().split(/\s+/)[0] || "";
+function initials(n) { const p = String(n || "").trim().split(/\s+/).filter(Boolean); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase(); }
+function shortName(n) { const p = String(n || "").trim().split(/\s+/).filter(Boolean); if (p.length < 2) return p[0] || ""; return p[0] + " " + p[p.length - 1][0].toUpperCase() + "."; }
+function weekLabel(w) { const d = parseYmd(w); return "S" + pad(isoWeek(d)); }
+
+/* ——————————— réglages de cet appareil ——————————— */
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem("top3_" + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("top3_" + k, JSON.stringify(v)); } catch (e) { /* stockage indisponible */ } },
+};
+let DEVICE = LS.get("device", null);
+if (!DEVICE) { DEVICE = Math.random().toString(36).slice(2, 8); LS.set("device", DEVICE); }
+let USER = LS.get("user", ""), ME = LS.get("me", "");
+let HIDDEN = new Set(LS.get("hidden", []));
+let VIEW = LS.get("view", "team");
+
+/* ——————————— Firebase : configuration du site ———————————
+   À remplir une seule fois (voir README.md) : console Firebase > Paramètres du projet > Vos applications > Config.
+   Ces valeurs ne sont pas secrètes : la protection vient des règles Firestore et du lien d'équipe. */
+const FIREBASE_CONFIG = {
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  appId: "",
+};
+const FIREBASE_VER = "10.12.2";
+
+/* ——————————— données ———————————
+   Un document Firestore par case : la dernière saisie remplace la précédente.
+   teams/{équipe}                      { name, created, by }
+   teams/{équipe}/members/{membre}     événement t:"m"
+   teams/{équipe}/actions/{action}     événement t:"a"
+   teams/{équipe}/config/{réglage}     événement t:"c"
+   teams/{équipe}/cells/{w}_{m}_{f}    événement t:"f" (lu semaine par semaine : where w == lundi)   */
+let EVENTS = new Map();
+let TEAM = [], DATA = new Map(), ACTIONS = new Map(), CFG = {};
+let LASTSAVE = 0, LASTSYNC = 0, PENDINGW = 0;
+let EXAMPLE = null;
+const CLOUD = { state: "init", err: "", api: null, db: null, team: LS.get("team", ""), teamName: LS.get("teamName", ""), unsub: [], weekUnsub: null, weekSub: "" };
+
+const evKey = (e) => (e.t === "f" ? `f|${e.w}|${e.m}|${e.f}` : e.t === "c" ? `c|${e.f}` : `${e.t}|${e.m}`);
+function validEv(e) {
+  if (!e || typeof e.id !== "string" || typeof e.ts !== "number") return false;
+  if (e.t === "f") return typeof e.m === "string" && /^[A-Za-z0-9]{1,40}$/.test(e.m) && /^\d{4}-\d{2}-\d{2}$/.test(e.w) && /^[tjspd][1-6]$/.test(e.f) && typeof e.v === "string";
+  if (e.t === "m" || e.t === "a") return typeof e.m === "string" && /^[A-Za-z0-9]{1,40}$/.test(e.m);
+  if (e.t === "c") return CFG_KEYS.includes(e.f) && typeof e.v === "string";
+  return false;
+}
+const newer = (a, b) => a.ts > b.ts || (a.ts === b.ts && a.id > b.id);
+function cleanAction(v) {
+  if (!v || typeof v !== "object" || typeof v.text !== "string" || !v.text.trim()) return null;
+  const week = /^\d{4}-\d{2}-\d{2}$/.test(v.week) ? v.week : "";
+  const day = week ? Math.max(0, Math.min(6, Math.round(Number(v.day) || 0))) : 0;
+  return { text: v.text.trim().slice(0, 300), owner: typeof v.owner === "string" ? v.owner : "", week, day, done: !!v.done, doneAt: Number(v.doneAt) || 0, first: typeof v.first === "string" ? v.first : "", created: Number(v.created) || 0 };
+}
+function computeState(iter) {
+  const last = new Map();
+  for (const e of iter) { const k = evKey(e), c = last.get(k); if (!c || newer(e, c)) last.set(k, e); }
+  const team = new Map(), data = new Map(), actions = new Map(), cfg = {};
+  for (const e of last.values()) {
+    if (e.t === "m") { if (e.v && typeof e.v === "object" && e.v.name) team.set(e.m, { id: e.m, name: String(e.v.name).slice(0, 60), email: String(e.v.email || "").slice(0, 120), order: Number(e.v.order) || 0 }); }
+    else if (e.t === "f") { const k = e.w + "|" + e.m; let o = data.get(k); if (!o) data.set(k, (o = {})); o[e.f] = e.v.slice(0, 500); }
+    else if (e.t === "a") { const a = cleanAction(e.v); if (a) actions.set(e.m, { ...a, id: e.m, _ts: e.ts, _by: e.by || "" }); }
+    else if (e.t === "c") cfg[e.f] = e.v;
+  }
+  return { last, team: [...team.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "fr")), data, actions, cfg };
+}
+function replay() { const s = computeState(EVENTS.values()); TEAM = s.team; DATA = s.data; ACTIONS = s.actions; CFG = s.cfg; }
+function docPath(e) {
+  if (e.t === "f") return ["cells", `${e.w}_${e.m}_${e.f}`];
+  if (e.t === "c") return ["config", e.f];
+  return [e.t === "m" ? "members" : "actions", e.m];
+}
+function clean(e) { const o = {}; for (const k of ["id", "ts", "by", "t", "w", "m", "f", "v"]) if (e[k] !== undefined) o[k] = e[k]; return o; }
+function emit(ev) {
+  ev.id = uid() + DEVICE.slice(0, 2); ev.ts = Date.now(); ev.by = USER || "?";
+  EVENTS.set(evKey(ev), ev); replay();
+  if (EXAMPLE) return;
+  if (CLOUD.state !== "team") { toast("Pas encore relié à l'équipe en ligne : cette saisie n'est pas enregistrée.", true); return; }
+  PENDINGW++; setStateTxt();
+  const { doc, setDoc } = CLOUD.api;
+  setDoc(doc(CLOUD.db, "teams", CLOUD.team, ...docPath(ev)), clean(ev))
+    .then(() => { LASTSAVE = Date.now(); CLOUD.err = ""; })
+    .catch((e) => { CLOUD.err = errText(e); toast("Enregistrement impossible : " + CLOUD.err + ".", true); })
+    .finally(() => { PENDINGW = Math.max(0, PENDINGW - 1); setStateTxt(); renderBanner(); });
+}
+function errText(e) {
+  const c = (e && e.code) || "";
+  if (c.includes("permission-denied")) return "accès refusé (lien d'équipe ou règles Firestore)";
+  if (c.includes("operation-not-allowed") || c.includes("admin-restricted")) return "connexion anonyme non activée dans Firebase";
+  if (c.includes("network") || c.includes("unavailable")) return "serveur injoignable (réseau)";
+  if (c.includes("api-key") || c.includes("invalid-api")) return "configuration Firebase incorrecte";
+  return (e && e.message) || String(e);
+}
+
+/* ——— équipe en ligne ——— */
+const teamLink = () => `${location.origin}${location.pathname}#t=${CLOUD.team}`;
+function teamFromHash() { const m = /^#t=([A-Za-z0-9]{20,40})$/.exec(location.hash || ""); return m ? m[1] : ""; }
+function randomId(n) { const a = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789", b = new Uint8Array(n); crypto.getRandomValues(b); return [...b].map((x) => a[x % a.length]).join(""); }
+async function cloudStart() {
+  if (window.__FAKE_FB) { CLOUD.api = window.__FAKE_FB.api; CLOUD.db = window.__FAKE_FB.db; }
+  else {
+    if (!FIREBASE_CONFIG.projectId || !FIREBASE_CONFIG.apiKey) { CLOUD.state = "noconfig"; render(); return; }
+    try {
+      const base = `https://www.gstatic.com/firebasejs/${FIREBASE_VER}/`;
+      const [appM, authM, fsM] = await Promise.all([import(base + "firebase-app.js"), import(base + "firebase-auth.js"), import(base + "firebase-firestore.js")]);
+      const app = appM.initializeApp(FIREBASE_CONFIG);
+      let db;
+      try { db = fsM.initializeFirestore(app, { ignoreUndefinedProperties: true, localCache: fsM.persistentLocalCache({ tabManager: fsM.persistentMultipleTabManager() }) }); }
+      catch (e) { db = fsM.getFirestore(app); }
+      await authM.signInAnonymously(authM.getAuth(app));
+      CLOUD.api = fsM; CLOUD.db = db;
+    } catch (e) { CLOUD.state = "error"; CLOUD.err = errText(e); render(); return; }
+  }
+  CLOUD.state = "ready";
+  const fromLink = teamFromHash();
+  if (fromLink && fromLink !== CLOUD.team) await joinTeam(fromLink);
+  else if (CLOUD.team) await openTeam(CLOUD.team);
+  render();
+}
+async function openTeam(id) {
+  const { doc, getDoc } = CLOUD.api;
+  let name = "";
+  try {
+    const snap = await getDoc(doc(CLOUD.db, "teams", id));
+    if (!snap.exists()) {
+      if (CLOUD.team === id) { CLOUD.team = ""; LS.set("team", ""); }
+      infoWin("Lien d'équipe inconnu", ["Ce lien ne correspond à aucune équipe. Demande le lien à jour à ton responsable, ou crée une équipe dans ⚙."]);
+      return false;
+    }
+    name = String((snap.data() || {}).name || "Équipe").slice(0, 60);
+  } catch (e) {
+    if (CLOUD.team !== id) { infoWin("Équipe inaccessible", ["Impossible d'ouvrir cette équipe : " + errText(e) + "."]); return false; }
+    CLOUD.err = errText(e);   // hors ligne : on ouvre l'équipe déjà connue depuis le cache de l'appareil
+    name = CLOUD.teamName;
+  }
+  if (CLOUD.team !== id) { EVENTS = new Map(); replay(); }
+  CLOUD.team = id; CLOUD.teamName = name || "Équipe"; LS.set("team", id); LS.set("teamName", CLOUD.teamName);
+  if (location.hash !== "#t=" + id) history.replaceState(null, "", "#t=" + id);
+  subscribe(); CLOUD.state = "team"; STRUCT = ""; render();
+  return true;
+}
+async function joinTeam(id) { if (await openTeam(id)) toast(`Bienvenue dans l'équipe « ${CLOUD.teamName} ».`); }
+async function createTeam(name) {
+  const { doc, setDoc } = CLOUD.api;
+  const id = randomId(24);
+  try { await setDoc(doc(CLOUD.db, "teams", id), { name: name.slice(0, 60), created: Date.now(), by: USER || "?" }); }
+  catch (e) { toast("Création impossible : " + errText(e) + ".", true); return; }
+  await openTeam(id);
+  teamLinkWin(true);
+}
+function leaveTeam() {
+  unsubscribeAll(); CLOUD.team = ""; CLOUD.teamName = ""; LS.set("team", ""); LS.set("teamName", "");
+  EVENTS = new Map(); replay(); history.replaceState(null, "", location.pathname); CLOUD.state = CLOUD.api ? "ready" : CLOUD.state; STRUCT = ""; render();
+}
+function unsubscribeAll() { CLOUD.unsub.forEach((u) => u()); CLOUD.unsub = []; if (CLOUD.weekUnsub) CLOUD.weekUnsub(); CLOUD.weekUnsub = null; CLOUD.weekSub = ""; }
+function subscribe() {
+  unsubscribeAll();
+  const { collection, onSnapshot } = CLOUD.api;
+  for (const c of ["members", "actions", "config"]) CLOUD.unsub.push(onSnapshot(collection(CLOUD.db, "teams", CLOUD.team, c), applySnap, onSnapErr));
+  subscribeWeek();
+}
+function subscribeWeek() {
+  if (!CLOUD.team || !CLOUD.api || CLOUD.weekSub === weekKey) return;
+  if (CLOUD.weekUnsub) CLOUD.weekUnsub();
+  const { collection, query, where, onSnapshot } = CLOUD.api;
+  CLOUD.weekSub = weekKey;
+  CLOUD.weekUnsub = onSnapshot(query(collection(CLOUD.db, "teams", CLOUD.team, "cells"), where("w", "==", weekKey)), applySnap, onSnapErr);
+}
+function applySnap(snap) {
+  const target = EXAMPLE ? EXAMPLE.EVENTS : EVENTS;
+  let ch = false;
+  snap.docChanges().forEach((c) => {
+    if (c.type === "removed") return;
+    const e = c.doc.data(); if (!validEv(e)) return;
+    const k = evKey(e), cur = target.get(k);
+    if (!cur || cur.id !== e.id) { target.set(k, e); ch = true; }
+  });
+  LASTSYNC = Date.now(); if (CLOUD.err && navigator.onLine) CLOUD.err = "";
+  if (ch && !EXAMPLE) { replay(); render(); }
+  setStateTxt(); renderBanner();
+}
+function onSnapErr(e) { CLOUD.err = errText(e); setStateTxt(); renderBanner(); }
+async function fetchAll() {
+  if (EXAMPLE || CLOUD.state !== "team") return [...EVENTS.values()];
+  const { collection, getDocs } = CLOUD.api, out = [];
+  for (const c of ["members", "actions", "config", "cells"]) {
+    const snap = await getDocs(collection(CLOUD.db, "teams", CLOUD.team, c));
+    snap.forEach((d) => { const e = d.data(); if (validEv(e)) out.push(e); });
+  }
+  return out;
+}
+function saveOut(sub, name, blob) {
+  const a = h("a", { href: URL.createObjectURL(blob), download: name }); document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  return "dans Téléchargements";
+}
+
+/* ——————————— semaine, cases, règles ——————————— */
+let monday = mondayOf(new Date()), weekKey = ymd(monday);
+const PEND = new Map();
+const pkey = (mid, f) => `${weekKey}|${mid}|${f}`;
+const cfg = (k, d) => (typeof CFG[k] === "string" && CFG[k] ? CFG[k] : d);
+const showSat = () => cfg("samedi", "oui") !== "non";
+const nDays = () => (showSat() ? 6 : 5);
+function val(mid, f) { const p = PEND.get(pkey(mid, f)); if (p) return p.v; const o = DATA.get(weekKey + "|" + mid); const v = o ? o[f] : undefined; return typeof v === "string" ? v : ""; }
+function defaultStatus(i) { if (i === 6) return "Repos"; return holidayName(addDays(monday, i - 1)) ? "Férié" : "Présent"; }
+const status = (mid, i) => val(mid, "s" + i) || defaultStatus(i);
+const working = (mid, i) => WORKING.has(status(mid, i));
+const daysOf = (mid, k) => val(mid, "j" + k).split(",").map(Number).filter((n) => n >= 1 && n <= 6);
+function dueAt(i) { const [hh, mm] = cfg("deadline", "09:30").split(":").map(Number); const d = addDays(monday, i - 1); d.setHours(hh || 9, mm || 0, 0, 0); return d; }
+const isDue = (i) => new Date() >= dueAt(i);
+const needs = (mid, i) => i <= 5 && working(mid, i);
+// priorité du jour : la case écrite, ou un objectif du Top 3 écrit et prévu ce jour-là
+const prioOk = (p, nTops) => !!String(p || "").trim() || nTops > 0;
+const plannedTops = (mid, i) => [1, 2, 3].filter((k) => daysOf(mid, k).includes(i) && val(mid, "t" + k).trim());
+const hasPriority = (mid, i) => prioOk(val(mid, "p" + i), plannedTops(mid, i).length);
+function missingDays(mid) { const out = []; for (let i = 1; i <= 5; i++) if (isDue(i) && needs(mid, i) && !hasPriority(mid, i)) out.push(i); return out; }
+function missingTop(mid) { let req = false; for (let i = 1; i <= 5; i++) if (needs(mid, i)) req = true; return isDue(1) && req && [1, 2, 3].some((k) => !val(mid, "t" + k).trim()); }
+const missCount = (mid) => missingDays(mid).length + (missingTop(mid) ? 1 : 0);
+const isCurrentWeek = () => ymd(mondayOf(new Date())) === weekKey;
+function todayIndex() { if (!isCurrentWeek()) return 0; const i = ((new Date().getDay() + 6) % 7) + 1; return i <= 6 ? i : 0; }
+function meId() { if (ME && TEAM.some((m) => m.id === ME)) return ME; const s = slug(USER); const m = TEAM.find((x) => slug(x.name) === s); return m ? m.id : ""; }
+const visibleTeam = () => TEAM.filter((m) => !HIDDEN.has(m.id));
+const member = (id) => TEAM.find((m) => m.id === id);
+
+function edit(mid, f, v, now) {
+  const k = pkey(mid, f); let p = PEND.get(k);
+  if (!p) PEND.set(k, (p = { w: weekKey, m: mid, f }));
+  p.v = v; clearTimeout(p.timer);
+  if (now) commit(k); else p.timer = setTimeout(() => commit(k), 700);
+  update();
+}
+function commit(k) {
+  const p = PEND.get(k); if (!p) return;
+  clearTimeout(p.timer); PEND.delete(k);
+  const o = DATA.get(p.w + "|" + p.m), cur = o && typeof o[p.f] === "string" ? o[p.f] : "";
+  if (cur !== p.v) emit({ t: "f", w: p.w, m: p.m, f: p.f, v: p.v });
+  update();
+}
+function flushEdits() { for (const k of [...PEND.keys()]) commit(k); }
+function setField(mid, f, v) { const k = pkey(mid, f); PEND.set(k, { w: weekKey, m: mid, f, v }); commit(k); }
+
+/* ——————————— actions en attente ——————————— */
+function actDate(a) { if (!a.week) return null; return addDays(parseYmd(a.week), (a.day || 6) - 1); }
+function actionState(a, now = new Date()) {
+  if (a.done) return "done";
+  if (!a.week) return "later";
+  return actDate(a) < startOfDay(now) ? "late" : "planned";
+}
+function whenLabel(a) { if (!a.week) return "Plus tard"; const w = parseYmd(a.week); return weekLabel(a.week) + (a.day ? ` · ${DSHORT[a.day - 1]} ${fmtDM(addDays(w, a.day - 1))}` : ""); }
+function firstLabel(a) {
+  if (!a.first || a.first === `${a.week}|${a.day}`) return "";
+  const [w, d] = a.first.split("|"); if (!w) return "";
+  return "initialement " + weekLabel(w) + (+d ? " · " + DSHORT[+d - 1] : "");
+}
+function saveAction(id, patch) {
+  const cur = ACTIONS.get(id);
+  const base = cur ? { text: cur.text, owner: cur.owner, week: cur.week, day: cur.day, done: cur.done, doneAt: cur.doneAt, first: cur.first, created: cur.created } : { text: "", owner: "", week: "", day: 0, done: false, doneAt: 0, first: "", created: Date.now() };
+  const v = { ...base, ...patch };
+  if (!v.week) v.day = 0;
+  if (v.week && !v.first) v.first = `${v.week}|${v.day || 0}`;
+  if (patch.done === true && !base.done) v.doneAt = Date.now();
+  if (patch.done === false) v.doneAt = 0;
+  emit({ t: "a", m: id, v });
+}
+const pendingActions = () => [...ACTIONS.values()].filter((a) => !a.done);
+const lateActions = () => [...ACTIONS.values()].filter((a) => actionState(a) === "late");
+function dayItems(mid, i) {
+  const tops = [];
+  for (let k = 1; k <= 3; k++) if (daysOf(mid, k).includes(i)) tops.push({ k, t: val(mid, "t" + k).trim(), done: val(mid, "d" + k) === "1" });
+  const acts = [...ACTIONS.values()].filter((a) => a.owner === mid && a.week === weekKey && a.day === i).sort((a, b) => a.created - b.created);
+  return { tops, acts };
+}
+
+/* ——————————— rendu : barre, bandeau, onglets ——————————— */
+function setStateTxt() {
+  const b = $("#state"), dot = b.querySelector(".dot"), t = b.querySelector(".txt");
+  let cls = "dot", txt, tip;
+  const offline = !navigator.onLine;
+  if (EXAMPLE) { txt = "Exemple : rien n'est enregistré"; tip = "Quitte l'exemple pour retrouver tes données."; }
+  else if (CLOUD.state === "noconfig") { cls = "dot bad"; txt = "Site non relié à Firebase"; tip = "Colle la configuration Firebase dans index.html (voir README)."; }
+  else if (CLOUD.state === "error") { cls = "dot bad"; txt = "Connexion impossible"; tip = CLOUD.err + ". Clic : réessayer."; }
+  else if (CLOUD.state === "init") { txt = "Connexion…"; tip = ""; }
+  else if (CLOUD.state === "ready") { txt = "Aucune équipe ouverte"; tip = "Clic : créer l'équipe ou ouvrir son lien."; }
+  else if (offline) { txt = PENDINGW ? "Hors ligne · envoi en attente" : "Hors ligne"; tip = "Tes saisies sont gardées sur cet appareil et partent au retour du réseau."; }
+  else if (CLOUD.err) { cls = "dot bad"; txt = "Erreur d'enregistrement"; tip = CLOUD.err + ". Clic : recharger."; }
+  else if (PENDINGW) { cls = "dot ok"; txt = "Enregistrement…"; tip = ""; }
+  else { cls = "dot ok"; txt = LASTSAVE ? "Enregistré à " + hhmm(LASTSAVE) : "En ligne · à jour"; tip = `Équipe « ${CLOUD.teamName} » : les saisies de chacun arrivent en direct.`; }
+  dot.className = cls; t.textContent = txt; b.title = tip;
+}
+function banner(kind, nodes) {
+  const b = $("#banner");
+  if (!kind) { b.className = ""; b.replaceChildren(); return; }
+  b.className = "on b-" + kind; b.replaceChildren(h("div", { class: "in" }, ...nodes));
+}
+let BANSIG = "";
+function renderBanner() {
+  // un seul bandeau à la fois : alerte > exemple > nouveauté > ma part à remplir
+  const mid = meId(), mm = mid && member(mid);
+  const sig = [CLOUD.state, CLOUD.err, navigator.onLine ? 1 : 0, EXAMPLE ? 1 : 0, LS.get("seenVer", ""), TEAM.length ? 1 : 0, mm && isCurrentWeek() ? whatMissing(mm).join("|") : ""].join("#");
+  if (sig === BANSIG) return; BANSIG = sig;
+  if (!EXAMPLE && CLOUD.state === "noconfig") return banner("red", [h("span", null, "Ce site n'est pas encore relié à sa base Firebase : colle la configuration du projet en haut du script de index.html (voir README). En attendant, « Charger un exemple » permet de le découvrir.")]);
+  if (!EXAMPLE && CLOUD.state === "error") return banner("red", [h("span", null, `Connexion à la base impossible (${CLOUD.err}). Vérifie le réseau ; si ça continue, le réseau de l'entreprise bloque peut-être Firebase.`), h("span", { class: "grow" }), on(h("button", { class: "btn sm", type: "button" }, "Réessayer"), "click", () => location.reload())]);
+  if (!EXAMPLE && CLOUD.state === "team" && !navigator.onLine) return banner("red", [h("span", null, "Hors ligne : tes saisies sont gardées sur cet appareil et partiront au retour du réseau.")]);
+  if (!EXAMPLE && CLOUD.state === "team" && CLOUD.err) return banner("red", [h("span", null, `Problème d'enregistrement : ${CLOUD.err}.`), h("span", { class: "grow" }), on(h("button", { class: "btn sm", type: "button" }, "Recharger"), "click", () => location.reload())]);
+  if (EXAMPLE) return banner("orange", [h("span", null, "Exemple : données fictives, rien n'est enregistré."), h("span", { class: "grow" }), on(h("button", { class: "btn sm", type: "button" }, "Quitter l'exemple"), "click", quitExample)]);
+  if (!LS.get("seenVer", "") && CLOUD.state === "team") LS.set("seenVer", APP.ver);   // première visite : rien de « nouveau » à annoncer
+  if (LS.get("seenVer", "") && LS.get("seenVer", "") !== APP.ver) return banner("yellow", [h("span", null, `Nouveau dans la version ${APP.ver} : ${NEWS_SHORT}.`), h("span", { class: "grow" }), on(h("button", { class: "btn sm", type: "button" }, "Quoi de neuf"), "click", () => { LS.set("seenVer", APP.ver); helpWin("news"); render(); }), on(h("button", { class: "btn sm icon ghost", type: "button", "aria-label": "Fermer le bandeau" }, "✕"), "click", () => { LS.set("seenVer", APP.ver); render(); })]);
+  const id = meId(), m = id && member(id);
+  if (m && isCurrentWeek()) {
+    const parts = whatMissing(m);
+    if (parts.length) return banner("red", [h("span", null, `${firstName(m.name)}, il te reste à remplir ${parts.join(" et ")}.`), h("span", { class: "grow" }), on(h("button", { class: "btn primary sm", type: "button" }, "Remplir"), "click", () => fixFor(m.id))]);
+  }
+  banner(null);
+}
+let TABSIG = "";
+function renderTabs() {
+  const me = meId();
+  const list = visibleTeam();
+  const sig = [VIEW, me, list.map((m) => m.id + m.name + missCount(m.id)).join(",")].join("#");
+  if (sig === TABSIG) return; TABSIG = sig;
+  const tabs = $("#tabs"); tabs.replaceChildren();
+  const mk = (id, label, extra, title) => {
+    const b = h("button", { class: "tab", type: "button", role: "tab", "aria-selected": String(VIEW === id), title: title || null }, ...extra, label);
+    on(b, "click", () => setView(id));
+    return b;
+  };
+  tabs.append(mk("team", "Équipe", [], "Tout le monde sur un tableau"));
+  const ordered = me && list.some((m) => m.id === me) ? [list.find((m) => m.id === me), ...list.filter((m) => m.id !== me)] : list;
+  for (const m of ordered) {
+    const c = missCount(m.id);
+    const t = mk(m.id, m.id === me ? "Ma semaine" : shortName(m.name), [h("span", { class: "av" + (m.id === me ? " me" : "") }, initials(m.name))], m.name);
+    if (c) t.append(h("span", { class: "cnt", "aria-label": c + " case(s) à remplir" }, String(c)));
+    tabs.append(t);
+  }
+}
+let VIEW_TOUCHED = false;
+function setView(id) { VIEW_TOUCHED = true; flushEdits(); VIEW = id; LS.set("view", id); STRUCT = ""; render(); window.scrollTo({ top: 0 }); }
+function renderToolbar() {
+  $("#wk").textContent = "S" + pad(isoWeek(monday));
+  const f = (d) => d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+  $("#range").textContent = `${f(monday)} – ${f(addDays(monday, nDays() - 1))}`;
+  $("#thisweek").disabled = isCurrentWeek();
+  const vis = visibleTeam().length;
+  $("#people").textContent = TEAM.length ? `Personnes ${vis}/${TEAM.length}` : "Personnes";
+  const np = pendingActions().length, nl = lateActions().length;
+  const pb = $("#pending"); pb.replaceChildren("En attente");
+  if (np) pb.append(h("span", { class: nl ? "cnt" : "pastille" }, String(np)));
+  let miss = 0; for (const m of TEAM) miss += missCount(m.id);
+  const pa = $("#pastille"); pa.hidden = !miss; pa.textContent = String(miss);
+  $("#diffuser").title = miss ? `${miss} point(s) manquant(s) cette semaine` : "Tout est rempli";
+}
+
+/* ——————————— rendu : vues ——————————— */
+let STRUCT = "", REFS = {};
+function render() {
+  renderToolbar(); renderTabs(); renderBanner(); setStateTxt();
+  if (VIEW !== "team" && !member(VIEW)) { VIEW = "team"; }
+  if (!VIEW_TOUCHED && !EXAMPLE && VIEW === "team" && window.innerWidth < 700 && meId()) VIEW = meId();   // téléphone : ma semaine en cartes
+  const view = $("#view");
+  const key = [VIEW, weekKey, todayIndex(), meId(), nDays(), EXAMPLE ? 1 : 0, visibleTeam().map((m) => m.id + ":" + m.name).join("|"), TEAM.length, TEAM.length ? "" : [USER, CLOUD.state, CLOUD.team, LASTSYNC ? 1 : 0].join(",")].join("#");
+  if (key !== STRUCT) {
+    STRUCT = key;
+    const ae = document.activeElement, fid = ae && view.contains(ae) ? ae.id : "";
+    const sel = ae && typeof ae.selectionStart === "number" ? [ae.selectionStart, ae.selectionEnd] : null;
+    const scroller = view.querySelector(".board-scroll"), sl = scroller ? scroller.scrollLeft : 0;
+    REFS = {};
+    if (!TEAM.length) view.replaceChildren(...welcomeView());
+    else if (VIEW === "team") view.replaceChildren(...teamView());
+    else view.replaceChildren(...personView(member(VIEW)));
+    const sc = view.querySelector(".board-scroll"); if (sc) sc.scrollLeft = sl;
+    if (fid) { const n = document.getElementById(fid); if (n) { n.focus({ preventScroll: true }); if (sel && n.setSelectionRange) try { n.setSelectionRange(sel[0], sel[1]); } catch (e) { /* */ } } }
+  }
+  update();
+  if (!$("#drawer").hidden) renderDrawer();
+}
+
+function presSelect(m, i) {
+  const el = h("select", { class: "pres", id: `s${i}__${m.id}`, "data-mid": m.id, "data-f": "s" + i, "aria-label": `${m.name} – présence ${DAYS[i - 1].toLowerCase()}` });
+  STATUSES.forEach((s) => el.append(h("option", { value: s }, s)));
+  REFS[m.id].fields["s" + i] = el;
+  return el;
+}
+function caseField(m, i) {
+  const el = h("textarea", { class: "case", rows: "1", maxlength: "300", id: `p${i}__${m.id}`, "data-mid": m.id, "data-f": "p" + i, placeholder: "Priorité du jour", "aria-label": `${m.name} – priorité du ${DAYS[i - 1].toLowerCase()}` });
+  REFS[m.id].fields["p" + i] = el;
+  return el;
+}
+function objField(m, k) {
+  const el = h("input", { type: "text", class: "inp obj", maxlength: "160", id: `t${k}__${m.id}`, "data-mid": m.id, "data-f": "t" + k, placeholder: "Objectif " + k, "aria-label": `${m.name} – objectif ${k}` });
+  REFS[m.id].fields["t" + k] = el;
+  return el;
+}
+function numBtn(m, k) {
+  const b = h("button", { class: "num", type: "button", "data-mid": m.id, "data-done": String(k), "aria-label": `Objectif ${k} : marquer atteint`, title: "Clic : objectif atteint" }, String(k));
+  REFS[m.id].nums[k] = b;
+  return b;
+}
+function dayPicker(m, k) {
+  const wrap = h("div", { class: "daypick", role: "group", "aria-label": `Jours prévus pour l'objectif ${k}` });
+  REFS[m.id].picks[k] = [];
+  const ti = todayIndex();
+  for (let d = 1; d <= nDays(); d++) {
+    const id = `j${k}d${d}__${m.id}`;
+    const cb = h("input", { type: "checkbox", id, "data-mid": m.id, "data-j": String(k), "data-d": String(d) });
+    wrap.append(h("label", { for: id, title: DAYS[d - 1] }, cb, h("span", { class: d === ti ? "today" : null }, LETTERS[d - 1])));
+    REFS[m.id].picks[k].push(cb);
+  }
+  return wrap;
+}
+function newRefs(id) { REFS[id] = { fields: {}, picks: {}, nums: {}, cells: {}, items: {}, cases: {}, tops: {}, chk: {}, plus: {}, irow: {} }; return REFS[id]; }
+// cases ouvertes par le « + » (fermées si on les quitte vides)
+const OPENP = new Set();
+function itemsRow(m, i, items) {
+  const r = REFS[m.id];
+  const plus = h("button", { class: "pplus", type: "button", hidden: true, title: "Ajouter une autre priorité du jour", "aria-label": `${m.name} – ajouter une priorité du ${DAYS[i - 1].toLowerCase()}` }, "+");
+  on(plus, "click", () => { OPENP.add(`${weekKey}|${m.id}|${i}`); update(); const c = r.cases[i]; if (c) c.focus(); });
+  r.plus[i] = plus;
+  const row = h("div", { class: "irow" }, items, plus);
+  r.irow[i] = row;
+  return row;
+}
+
+function teamView() {
+  const list = visibleTeam(), me = meId(), ti = todayIndex();
+  const tiles = h("div", { class: "tiles", id: "tiles" });
+  const head = h("h2", { class: "sec" }, h("span", null, `Semaine ${isoWeek(monday)} · équipe`), h("span", { class: "fil" }), h("span", { class: "meta" }, list.length < TEAM.length ? `${list.length} personne(s) affichée(s) sur ${TEAM.length}` : `${TEAM.length} personne(s)`));
+  if (!list.length) return [head, tiles, h("p", { class: "empty-note" }, "Toutes les personnes sont masquées. Utilise le bouton « Personnes » pour en afficher.")];
+  const hr = h("tr", null, h("th", { class: "rh", scope: "col" }, h("span", { class: "sr" }, "Jour")));
+  for (const m of list) {
+    const r = newRefs(m.id);
+    const st = h("div", { class: "st" }); r.state = st;
+    const nm = on(h("button", { class: "nm", type: "button", title: "Ouvrir son plan de la semaine" }, m.name), "click", () => setView(m.id));
+    const x = on(h("button", { class: "x", type: "button", "aria-label": `Masquer ${m.name}`, title: "Masquer cette personne" }, "✕"), "click", () => hidePerson(m.id));
+    hr.append(h("th", { class: "ph" + (m.id === me ? " me" : ""), scope: "col" }, h("div", { class: "top" }, nm, x), st));
+  }
+  const tb = h("tbody");
+  const trTop = h("tr", null, h("th", { class: "rh", scope: "row" }, h("span", { class: "d" }, "Top 3"), h("span", { class: "dt" }, "objectifs et jours prévus")));
+  for (const m of list) {
+    const r = REFS[m.id];
+    const box = h("div", { class: "t3" });
+    for (let k = 1; k <= 3; k++) box.append(h("div", { class: "t3row" }, numBtn(m, k), h("div", null, objField(m, k), dayPicker(m, k))));
+    const td = h("td", { class: "c" }, box); r.topcell = td; trTop.append(td);
+  }
+  tb.append(trTop);
+  for (let i = 1; i <= nDays(); i++) {
+    const d = addDays(monday, i - 1), hol = i <= 5 ? holidayName(d) : "";
+    const tr = h("tr", { class: [i === ti ? "today" : "", hol ? "off" : ""].filter(Boolean).join(" ") || null },
+      h("th", { class: "rh", scope: "row" }, h("span", { class: "d" }, DAYS[i - 1]), h("span", { class: "dt" }, fmtDM(d)),
+        i === ti ? h("span", { class: "tg" }, "Aujourd'hui") : null, hol ? h("span", { class: "ho" }, "Férié · " + hol) : i === 6 ? h("span", { class: "ho" }, "facultatif") : null));
+    for (const m of list) {
+      const r = REFS[m.id];
+      const items = h("div", { class: "items" }); r.items[i] = items;
+      const cs = caseField(m, i); r.cases[i] = cs;
+      const td = h("td", { class: "c", "data-drop": `${m.id}|${i}` }, h("div", { class: "cell" }, presSelect(m, i), cs, itemsRow(m, i, items)));
+      r.cells[i] = td; tr.append(td);
+    }
+    tb.append(tr);
+  }
+  const table = h("table", { class: "board" }, h("thead", null, hr), tb);
+  return [head, tiles, legend(), h("div", { class: "board-scroll" }, table), h("p", { class: "hint", style: "margin-top:10px" }, "Clic sur un nom : son plan de la semaine. Les actions en attente se glissent sur un jour.")];
+}
+
+function personView(m) {
+  const r = newRefs(m.id), me = meId(), ti = todayIndex();
+  const head = h("div", { class: "pv-head" }, h("span", { class: "av" + (m.id === me ? " me" : "") }, initials(m.name)),
+    h("div", { class: "who" }, h("span", { class: "big" }, m.name), h("span", { class: "sub", id: "pv-sub" }, "")), h("span", { class: "grow" }));
+  const st = h("span", null); r.state = st; head.append(st);
+  if (m.id !== me) head.append(on(h("button", { class: "btn sm", type: "button", title: "Retrouver ta colonne et ta semaine" }, "C'est moi"), "click", () => { USER = m.name; ME = m.id; LS.set("user", USER); LS.set("me", ME); STRUCT = ""; render(); }));
+  const tops = h("div", { class: "tops" });
+  for (let k = 1; k <= 3; k++) {
+    const done = h("input", { type: "checkbox", id: `d${k}__${m.id}`, "data-mid": m.id, "data-done": String(k) }); r.chk[k] = done;
+    const card = h("div", { class: "topcard" }, h("div", { class: "hd" }, numBtn(m, k), h("span", { class: "lb" }, "Objectif " + k), h("label", { class: "chk", for: done.id }, done, "Atteint")), objField(m, k), dayPicker(m, k));
+    r.tops[k] = card; tops.append(card);
+  }
+  const week = h("div", { class: "week6" + (nDays() === 5 ? " five" : "") });
+  for (let i = 1; i <= nDays(); i++) {
+    const d = addDays(monday, i - 1), hol = i <= 5 ? holidayName(d) : "";
+    const items = h("div", { class: "items" }); r.items[i] = items;
+    const cs = caseField(m, i); r.cases[i] = cs;
+    const rep = on(h("button", { class: "linkbtn", type: "button", title: "Garder cette priorité dans les actions en attente et vider la case" }, "Mettre en attente"), "click", () => {
+      const t = val(m.id, "p" + i).trim(); if (!t) return;
+      saveAction(uid(), { text: t, owner: m.id, week: "", day: 0 }); setField(m.id, "p" + i, ""); toast("Priorité mise en attente : retrouve-la dans « En attente ».");
+    });
+    r.rep = r.rep || {}; r.rep[i] = rep;
+    const add = addLine(m.id, i);
+    const card = h("div", { class: "daycard" + (i === ti ? " today" : ""), "data-drop": `${m.id}|${i}` },
+      h("div", { class: "dc-h" }, h("span", { class: "d" }, DAYS[i - 1]), h("span", { class: "dt" }, fmtDM(d) + (i === ti ? " · aujourd'hui" : ""))),
+      presSelect(m, i), hol ? h("div", { class: "offtxt" }, "Férié · " + hol) : null, cs, h("div", { class: "dc-row" }, rep), itemsRow(m, i, items), add);
+    r.cells[i] = card; week.append(card);
+  }
+  const pend = h("div", { class: "alist", id: "pv-pending", "data-drop": "later" });
+  r.pend = pend;
+  return [head,
+    h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "Top 3 de la semaine"), h("span", { class: "fil" }), h("span", { class: "meta" }, "coche les jours prévus")), tops),
+    h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, `Plan de la semaine ${isoWeek(monday)}`), h("span", { class: "fil" })), legend(), week),
+    h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "En attente"), h("span", { class: "fil" }), h("span", { class: "meta", id: "pv-pend-meta" }, "")),
+      h("p", { class: "hint", style: "margin-bottom:6px" }, "Glisse une action sur un jour pour la planifier, ou ouvre-la pour choisir une autre semaine."), pend,
+      h("div", { style: "margin-top:10px" }, on(h("button", { class: "btn sm", type: "button" }, "+ Nouvelle action"), "click", () => actionWin(null, { owner: m.id }))))];
+}
+function addLine(mid, i) {
+  const wrap = h("div", null);
+  const btn = on(h("button", { class: "addline", type: "button" }, "+ Action"), "click", () => {
+    const inp = h("input", { class: "inp addinp", maxlength: "300", placeholder: "Action, puis Entrée", "aria-label": "Nouvelle action" });
+    const done = (keep) => { const t = inp.value.trim(); if (keep && t) { saveAction(uid(), { text: t, owner: mid, week: weekKey, day: i }); } wrap.replaceChildren(btn); update(); };
+    on(inp, "keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); done(true); setTimeout(() => btn.click(), 0); } else if (e.key === "Escape") done(false); });
+    on(inp, "blur", () => done(true));
+    wrap.replaceChildren(inp); inp.focus();
+  });
+  wrap.append(btn);
+  return wrap;
+}
+function welcomeView() {
+  const s1 = !!USER, s2 = CLOUD.state === "team", s3 = TEAM.length > 0;
+  const step = (n, done, title, text, btn) => h("div", { class: "step" + (done ? " done" : "") }, h("div", { class: "sq" }, done ? "✓" : String(n)), h("div", null, h("h3", null, title), h("p", null, text), btn));
+  let t2, b2 = null;
+  if (CLOUD.state === "noconfig") t2 = "Le site n'est pas encore relié à sa base Firebase : la configuration est à coller dans index.html (voir README).";
+  else if (CLOUD.state === "error") t2 = `Connexion à la base impossible (${CLOUD.err}).`;
+  else if (CLOUD.state === "init") t2 = "Connexion à la base…";
+  else if (CLOUD.state === "team") t2 = `Équipe « ${CLOUD.teamName} ».`;
+  else { t2 = "Crée l'équipe une seule fois, puis envoie son lien aux collègues. Tu as déjà reçu un lien ? Ouvre-le ou colle-le ici."; b2 = h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn("Créer l'équipe", "primary sm", createTeamWin), btn("J'ai un lien d'équipe", "sm", joinWin)); }
+  if (CLOUD.state === "team" && !LASTSYNC) return [h("h2", { class: "sec" }, h("span", null, "Chargement"), h("span", { class: "fil" })), h("p", { class: "empty-note" }, `Ouverture de l'équipe « ${CLOUD.teamName} »…`)];
+  return [h("h2", { class: "sec" }, h("span", null, "Bienvenue"), h("span", { class: "fil" })),
+    h("p", { style: "margin:0 0 14px;max-width:70ch" }, "Chaque collaborateur écrit son Top 3 de la semaine, coche les jours prévus et remplit sa priorité du jour. Tu vois d'un coup d'œil ce qui manque et tu relances en un clic. Aucun compte : un lien d'équipe suffit, sur PC comme sur téléphone."),
+    h("div", { class: "steps" },
+      step(1, s1, "Ton nom", "Il signe tes saisies et retrouve ta colonne.", on(h("button", { class: "btn primary sm", type: "button" }, "Écrire mon nom"), "click", () => askName())),
+      step(2, s2, "L'équipe en ligne", t2, b2),
+      step(3, s3, "Les membres", "Une colonne par personne, à faire une seule fois : les autres retrouvent la liste en ouvrant le lien.", s2 ? on(h("button", { class: "btn primary sm", type: "button" }, "Ajouter les membres"), "click", teamWin) : null)),
+    h("p", { style: "margin-top:16px" }, on(h("button", { class: "btn sm", type: "button" }, "Charger un exemple"), "click", loadExample), " ", h("span", { class: "hint" }, "pour découvrir l'appli sans rien enregistrer."))];
+}
+function createTeamWin() {
+  if (!CLOUD.api) { infoWin("Base indisponible", ["Le site n'est pas relié à Firebase pour l'instant : voir README."]); return; }
+  const inp = h("input", { class: "inp", maxlength: "60", placeholder: "ex. PE Logistique · AMR", "aria-label": "Nom de l'équipe" });
+  const go = async () => { const n = inp.value.trim().replace(/\s+/g, " "); if (!n) { inp.focus(); return; } closeWin(); if (!USER) await askName(); await createTeam(n); };
+  on(inp, "keydown", (e) => { if (e.key === "Enter") go(); });
+  openWin({ title: "Créer l'équipe", size: "small", body: [h("label", { class: "fld" }, h("span", { class: "lb" }, "Nom de l'équipe"), inp, h("span", { class: "help" }, "Visible par toute l'équipe. Le site crée ensuite un lien secret à envoyer aux collègues."))], foot: [sp(), btn("Annuler", "", closeWin), btn("Créer", "primary", go)] });
+}
+function joinWin() {
+  const inp = h("input", { class: "inp", placeholder: "Colle ici le lien reçu", "aria-label": "Lien de l'équipe" });
+  const go = async () => { const m = /#t=([A-Za-z0-9]{20,40})/.exec(inp.value.trim()) || /^([A-Za-z0-9]{20,40})$/.exec(inp.value.trim()); if (!m) { toast("Ce lien ne contient pas d'équipe : il doit finir par #t= suivi du code.", true); inp.focus(); return; } closeWin(); await joinTeam(m[1]); };
+  on(inp, "keydown", (e) => { if (e.key === "Enter") go(); });
+  openWin({ title: "Rejoindre l'équipe", size: "small", body: [h("label", { class: "fld" }, h("span", { class: "lb" }, "Lien de l'équipe"), inp, h("span", { class: "help" }, "Le plus simple : ouvre directement le lien reçu dans Teams ou par mail."))], foot: [sp(), btn("Annuler", "", closeWin), btn("Rejoindre", "primary", go)] });
+}
+function teamLinkWin(isNew) {
+  const link = teamLink();
+  const inp = h("input", { class: "inp", readonly: true, value: link, "aria-label": "Lien de l'équipe" });
+  const cp = () => { try { navigator.clipboard.writeText(link).then(() => toast("Lien copié : colle-le dans Teams pour l'équipe."), () => { inp.select(); toast("Copie bloquée : le lien est sélectionné, fais Ctrl+C.", true); }); } catch (e) { inp.select(); } };
+  openWin({ title: isNew ? "Équipe créée" : "Lien de l'équipe", size: "small",
+    body: [isNew ? h("p", null, `L'équipe « ${CLOUD.teamName} » est prête. Envoie ce lien aux collègues : ils l'ouvrent, écrivent leur nom, et c'est tout.`) : h("p", null, `Lien de l'équipe « ${CLOUD.teamName} » à envoyer aux collègues.`),
+      inp, h("p", { class: "hint" }, "Ce lien contient la clé de l'équipe : ne l'envoie qu'aux membres de l'équipe. Pour un raccourci, ajoute-le en favori ou sur l'écran d'accueil du téléphone.")],
+    foot: [sp(), btn("Fermer", "", closeWin), btn("Copier le lien", "primary", cp)] });
+  setTimeout(() => inp.select(), 0);
+}
+
+/* mise à jour des valeurs sans reconstruire (garde le focus pendant la frappe) */
+const AUTOSIZE = !(window.CSS && CSS.supports && CSS.supports("field-sizing", "content"));
+function autosize(el) { if (!AUTOSIZE) return; el.style.height = "auto"; el.style.height = el.scrollHeight + 2 + "px"; }
+function update() {
+  const ae = document.activeElement;
+  for (const [mid, r] of Object.entries(REFS)) {
+    for (const [f, el] of Object.entries(r.fields)) {
+      const v = f[0] === "s" ? status(mid, +f.slice(1)) : val(mid, f);
+      if (el !== ae && el.value !== v) { el.value = v; if (el.tagName === "TEXTAREA") autosize(el); }
+      if (f[0] === "p") { const ph = plannedTops(mid, +f.slice(1)).length ? "Autre priorité (facultatif)" : "Priorité du jour"; if (el.placeholder !== ph) el.placeholder = ph; }
+      if (f[0] === "s") { el.dataset.st = el.value; el.classList.toggle("off", !WORKING.has(el.value)); }
+    }
+    const mt = missingTop(mid), md = missingDays(mid);
+    for (let k = 1; k <= 3; k++) {
+      const picked = daysOf(mid, k);
+      (r.picks[k] || []).forEach((cb) => { if (cb !== ae) cb.checked = picked.includes(+cb.dataset.d); });
+      const done = val(mid, "d" + k) === "1";
+      const n = r.nums[k]; if (n) { n.classList.toggle("done", done); n.textContent = done ? "✓" : String(k); n.setAttribute("aria-label", `Objectif ${k} : ${done ? "atteint, clic pour annuler" : "clic pour marquer atteint"}`); }
+      if (r.chk[k] && r.chk[k] !== ae) r.chk[k].checked = done;
+      const empty = !val(mid, "t" + k).trim();
+      const inp = r.fields["t" + k]; if (inp) { inp.classList.toggle("empty", empty); inp.classList.toggle("need", mt && empty); }
+      if (r.tops[k]) { r.tops[k].classList.toggle("done", done); r.tops[k].classList.toggle("need", mt && empty); }
+    }
+    for (let i = 1; i <= nDays(); i++) {
+      const cell = r.cells[i]; if (!cell) continue;
+      const w = working(mid, i);
+      cell.classList.toggle("miss", md.includes(i));
+      cell.classList.toggle("off-cell", !w);
+      cell.dataset.st = status(mid, i);
+      // toute case vide se replie en un petit « + » ; en rouge « + À remplir » quand elle manque
+      const empty = !val(mid, "p" + i).trim();
+      const showCase = w && (!empty || OPENP.has(`${weekKey}|${mid}|${i}`) || r.cases[i] === ae);
+      if (r.cases[i]) r.cases[i].hidden = !showCase;
+      const pl = r.plus[i];
+      if (pl) {
+        pl.hidden = !(w && !showCase);
+        const need = md.includes(i);
+        if (pl.classList.contains("need") !== need) { pl.classList.toggle("need", need); pl.textContent = need ? "+ À remplir" : "+"; }
+        const tip = need ? "Priorité du jour à remplir" : plannedTops(mid, i).length ? "Ajouter une autre priorité du jour" : "Écrire la priorité du jour";
+        if (pl.title !== tip) { pl.title = tip; pl.setAttribute("aria-label", `${(member(mid) || {}).name || ""} – ${tip.toLowerCase()} (${DAYS[i - 1].toLowerCase()})`); }
+      }
+      if (r.rep && r.rep[i]) r.rep[i].hidden = !w || !val(mid, "p" + i).trim();
+      fillItems(mid, i, r.items[i], VIEW === "team" ? 3 : 99);
+      if (r.irow[i]) r.irow[i].hidden = !r.items[i].childElementCount && r.plus[i].hidden;
+    }
+    if (r.state) {
+      const n = md.length + (mt ? 1 : 0);
+      r.state.replaceChildren(n ? h("span", { class: "et bad" }, `✕ ${n} à remplir`) : h("span", { class: "et ok" }, "✓ À jour"));
+    }
+    if (r.pend) fillPending(r.pend, (a) => a.owner === mid && !a.done && !(a.week === weekKey && a.day), true);
+  }
+  if (VIEW !== "team" && member(VIEW)) {
+    const all = [...ACTIONS.values()].filter((a) => a.owner === VIEW);
+    const wk = all.filter((a) => a.week === weekKey), dn = wk.filter((a) => a.done).length;
+    const sub = $("#pv-sub"); if (sub) sub.textContent = `${wk.length} action(s) prévue(s) cette semaine${wk.length ? `, ${dn} faite(s)` : ""} · ${all.filter((a) => actionState(a) === "late").length} en retard`;
+    const pm = $("#pv-pend-meta"); if (pm) pm.textContent = `${all.filter((a) => !a.done && !(a.week === weekKey && a.day)).length} action(s)`;
+  }
+  renderTiles(); renderToolbar(); renderTabs(); renderBanner();
+}
+function fillItems(mid, i, box, max) {
+  if (!box) return;
+  const { tops, acts } = dayItems(mid, i);
+  const sig = JSON.stringify([tops, acts.map((a) => [a.id, a.text, a.done, actionState(a)]), max]);
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const nodes = [];
+  for (const t of tops) {
+    const b = h("button", { class: "pchip" + (t.done ? " done" : ""), type: "button", title: t.t ? `Top ${t.k} prévu ce jour : il compte comme priorité du jour. Clic : modifier l'objectif.` : "Objectif à écrire" },
+      h("span", { class: "n" }, t.done ? "✓" : String(t.k)), h("span", { class: "t" }, t.t || "Objectif à écrire"));
+    on(b, "click", () => { const o = REFS[mid] && REFS[mid].fields["t" + t.k]; if (o) { o.scrollIntoView({ block: "center" }); o.focus({ preventScroll: true }); } });
+    nodes.push(b);
+  }
+  for (const a of acts) nodes.push(actLine(a));
+  if (nodes.length > max + 1) { const rest = nodes.length - max; nodes.splice(max); nodes.push(on(h("button", { class: "more", type: "button" }, `+ ${rest} autre(s)`), "click", () => setView(mid))); }
+  box.replaceChildren(...nodes);
+}
+function actLine(a) {
+  const st = actionState(a);
+  const cb = h("input", { type: "checkbox", "aria-label": "Action faite" }); cb.checked = a.done;
+  on(cb, "change", () => saveAction(a.id, { done: cb.checked }));
+  return h("div", { class: "act" + (a.done ? " done" : "") + (st === "late" ? " late" : ""), draggable: "true", "data-act": a.id }, cb,
+    on(h("button", { class: "t", type: "button", title: "Ouvrir l'action" }, a.text), "click", () => actionWin(a.id)));
+}
+function renderTiles() {
+  const box = $("#tiles"); if (!box) return;
+  const list = visibleTeam(), ti = todayIndex() && todayIndex() <= 5 ? todayIndex() : 0;
+  const topOk = list.filter((m) => [1, 2, 3].every((k) => val(m.id, "t" + k).trim())).length;
+  const topBad = list.some((m) => missingTop(m.id));
+  const wd = ti ? list.filter((m) => needs(m.id, ti)) : [];
+  const pOk = wd.filter((m) => hasPriority(m.id, ti)).length;
+  const pBad = ti && isDue(ti) && pOk < wd.length;
+  const wk = [...ACTIONS.values()].filter((a) => a.week === weekKey && list.some((m) => m.id === a.owner));
+  const late = lateActions().length;
+  const sig = [topOk, list.length, topBad, ti, pOk, wd.length, pBad, wk.length, wk.filter((a) => a.done).length, late].join(",");
+  if (box.dataset.sig === sig) return; box.dataset.sig = sig;
+  const tile = (cls, v, l, fn) => fn ? on(h("button", { class: "tile " + cls, type: "button" }, h("div", { class: "v" }, v), h("div", { class: "l" }, l)), "click", fn) : h("div", { class: "tile " + cls }, h("div", { class: "v" }, v), h("div", { class: "l" }, l));
+  box.replaceChildren(
+    tile(topOk === list.length ? "ok" : topBad ? "bad" : "warn", `${topOk} / ${list.length}`, "Top 3 complets"),
+    tile(!ti ? "" : pBad ? "bad" : pOk === wd.length ? "ok" : "warn", ti ? `${pOk} / ${wd.length}` : "–", ti ? "Priorités du jour remplies" : "Priorités du jour (hors semaine en cours)"),
+    tile("", `${wk.filter((a) => a.done).length} / ${wk.length}`, "Actions de la semaine faites"),
+    tile(late ? "bad" : "ok", String(late), "Actions en retard", () => openDrawer()));
+}
+
+/* ——————————— saisie ——————————— */
+const viewEl = $("#view");
+on(viewEl, "input", (e) => { const t = e.target; if (t.dataset.f && t.tagName !== "SELECT") { edit(t.dataset.mid, t.dataset.f, t.value, false); if (t.tagName === "TEXTAREA") autosize(t); } });
+on(viewEl, "change", (e) => {
+  const t = e.target;
+  if (t.dataset.j) { const mid = t.dataset.mid, k = t.dataset.j; const v = REFS[mid].picks[k].filter((c) => c.checked).map((c) => c.dataset.d).join(","); edit(mid, "j" + k, v, true); }
+  else if (t.dataset.done && t.type === "checkbox") setField(t.dataset.mid, "d" + t.dataset.done, t.checked ? "1" : "");
+  else if (t.dataset.f) edit(t.dataset.mid, t.dataset.f, t.value, true);
+});
+on(viewEl, "click", (e) => { const b = e.target.closest && e.target.closest("button.num"); if (b) { const mid = b.dataset.mid, k = b.dataset.done; setField(mid, "d" + k, val(mid, "d" + k) === "1" ? "" : "1"); } });
+on(viewEl, "keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && e.target.classList && e.target.classList.contains("case")) { e.preventDefault(); e.target.blur(); } });
+on(viewEl, "focusout", (e) => {
+  const t = e.target; if (!(t.dataset && t.dataset.mid && t.dataset.f)) return;
+  const k = pkey(t.dataset.mid, t.dataset.f); if (PEND.has(k)) commit(k);
+  if (t.classList.contains("case")) { if (!t.value.trim()) OPENP.delete(`${weekKey}|${t.dataset.mid}|${t.dataset.f.slice(1)}`); setTimeout(update, 0); }
+});
+
+/* glisser-déposer des actions */
+let DRAG = null;
+document.addEventListener("dragstart", (e) => { const it = e.target.closest && e.target.closest("[data-act]"); if (!it) return; DRAG = it.dataset.act; e.dataTransfer.setData("text/plain", "action"); e.dataTransfer.effectAllowed = "move"; document.body.classList.add("dragging"); });
+document.addEventListener("dragend", () => { DRAG = null; document.body.classList.remove("dragging"); document.querySelectorAll(".drop-over").forEach((x) => x.classList.remove("drop-over")); });
+document.addEventListener("dragover", (e) => {
+  if (!DRAG) return; const t = e.target.closest && e.target.closest("[data-drop]"); if (!t) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = "move";
+  document.querySelectorAll(".drop-over").forEach((x) => { if (x !== t) x.classList.remove("drop-over"); }); t.classList.add("drop-over");
+});
+document.addEventListener("drop", (e) => {
+  if (!DRAG) return; const t = e.target.closest && e.target.closest("[data-drop]"); if (!t) return;
+  e.preventDefault(); const id = DRAG, a = ACTIONS.get(id);
+  DRAG = null; document.body.classList.remove("dragging"); document.querySelectorAll(".drop-over").forEach((x) => x.classList.remove("drop-over"));
+  if (!a) return;
+  if (t.dataset.drop === "later") { saveAction(id, { week: "", day: 0 }); toast("Action gardée pour plus tard."); }
+  else { const [mid, d] = t.dataset.drop.split("|"); saveAction(id, { owner: mid, week: weekKey, day: +d }); toast(`Action planifiée : ${DAYS[+d - 1].toLowerCase()} ${fmtDM(addDays(monday, +d - 1))}${mid !== a.owner ? " pour " + firstName((member(mid) || {}).name) : ""}.`); }
+  render();
+});
+
+/* ——————————— présences : code couleur, afficher / masquer (réglage de cet appareil) ——————————— */
+let SHOW_PRES = LS.get("showPres", true) !== false;
+function legend() { return h("div", { class: "legend", "aria-label": "Légende des présences" }, h("span", { class: "lt" }, "Présences"), ...STATUSES.map((s) => h("span", { class: "lg", "data-st": s }, h("span", null, s)))); }
+function applyPres() {
+  document.body.classList.toggle("pres-on", SHOW_PRES);
+  const b = $("#prestoggle");
+  b.textContent = SHOW_PRES ? "Masquer les présences" : "Afficher les présences";
+  b.setAttribute("aria-pressed", String(SHOW_PRES));
+}
+on($("#prestoggle"), "click", () => {
+  SHOW_PRES = !SHOW_PRES; LS.set("showPres", SHOW_PRES); applyPres();
+  toast(SHOW_PRES ? "Présences affichées, avec leur code couleur." : "Présences masquées sur cet appareil. Les absences restent prises en compte dans les cases à remplir.");
+});
+
+/* ——————————— masquer des personnes ——————————— */
+function hidePerson(id) { HIDDEN.add(id); LS.set("hidden", [...HIDDEN]); if (VIEW === id) VIEW = "team"; STRUCT = ""; TABSIG = ""; render(); toast(`${(member(id) || {}).name || "Personne"} masqué(e). Bouton « Personnes » pour l'afficher.`); }
+function renderPeoplePop() {
+  const pop = $("#people-pop"); const me = meId();
+  const set = (ids) => { HIDDEN = new Set(ids); LS.set("hidden", [...HIDDEN]); STRUCT = ""; TABSIG = ""; render(); renderPeoplePop(); };
+  const rows = TEAM.map((m) => { const cb = h("input", { type: "checkbox", id: "vis__" + m.id }); cb.checked = !HIDDEN.has(m.id); on(cb, "change", () => { cb.checked ? HIDDEN.delete(m.id) : HIDDEN.add(m.id); set([...HIDDEN]); setTimeout(() => { const n = document.getElementById("vis__" + m.id); n && n.focus(); }, 0); }); return h("label", { for: cb.id }, cb, m.name + (m.id === me ? " (moi)" : "")); });
+  pop.replaceChildren(h("div", { class: "hint" }, "Personnes affichées sur cet appareil"),
+    ...(rows.length ? rows : [h("div", { class: "empty-note" }, "Aucune personne dans l'équipe.")]),
+    h("div", { class: "row" }, on(h("button", { class: "btn sm", type: "button" }, "Tout afficher"), "click", () => set([])),
+      me ? on(h("button", { class: "btn sm", type: "button" }, "Moi seulement"), "click", () => set(TEAM.filter((m) => m.id !== me).map((m) => m.id))) : null));
+}
+on($("#people"), "click", (e) => { e.stopPropagation(); const pop = $("#people-pop"); const open = pop.hidden; pop.hidden = !open; $("#people").setAttribute("aria-expanded", String(open)); if (open) { renderPeoplePop(); const f = pop.querySelector("input,button"); f && f.focus(); } });
+document.addEventListener("click", (e) => { const pop = $("#people-pop"); if (!pop.hidden && !e.target.closest(".popwrap")) { pop.hidden = true; $("#people").setAttribute("aria-expanded", "false"); } });
+
+/* ——————————— tiroir « En attente » ——————————— */
+let DR_OWNER = "";
+function openDrawer(owner) { DR_OWNER = owner != null ? owner : VIEW !== "team" ? VIEW : DR_OWNER; $("#drawer").hidden = false; renderDrawer(true); }
+function closeDrawer() { $("#drawer").hidden = true; $("#pending").focus(); }
+on($("#pending"), "click", () => ($("#drawer").hidden ? openDrawer() : closeDrawer()));
+function renderDrawer(full) {
+  const dr = $("#drawer");
+  const ae = document.activeElement;
+  if (full || !dr.firstChild) {
+    const sel = h("select", { class: "inp", id: "dr-owner", "aria-label": "Pilote" }, h("option", { value: "" }, "Toute l'équipe"), ...TEAM.map((m) => h("option", { value: m.id }, m.name)));
+    sel.value = DR_OWNER; on(sel, "change", () => { DR_OWNER = sel.value; renderDrawer(); });
+    const inp = h("input", { class: "inp", id: "dr-new", maxlength: "300", placeholder: "Nouvelle action, puis Entrée", "aria-label": "Nouvelle action" });
+    on(inp, "keydown", (e) => { if (e.key === "Enter" && inp.value.trim()) { saveAction(uid(), { text: inp.value.trim(), owner: DR_OWNER || meId() || "", week: "", day: 0 }); inp.value = ""; render(); } });
+    dr.replaceChildren(
+      h("div", { class: "dr-head" }, h("h2", null, "Actions en attente"), on(h("button", { class: "btn icon ghost", type: "button", "aria-label": "Fermer" }, "✕"), "click", closeDrawer)),
+      h("div", { class: "dr-tools" }, inp, sel, h("p", { class: "hint", style: "flex-basis:100%" }, "Glisse une action sur un jour du tableau, ou ouvre-la pour choisir une autre semaine.")),
+      h("div", { class: "dr-body", id: "dr-body" }));
+    if (full) setTimeout(() => inp.focus(), 0);
+  }
+  const body = $("#dr-body");
+  const sel = $("#dr-owner"); if (sel && sel !== ae) { const opts = ["", ...TEAM.map((m) => m.id)].join(","); if (sel.dataset.opts !== opts) { sel.replaceChildren(h("option", { value: "" }, "Toute l'équipe"), ...TEAM.map((m) => h("option", { value: m.id }, m.name))); sel.dataset.opts = opts; } sel.value = DR_OWNER; }
+  const f = (a) => !DR_OWNER || a.owner === DR_OWNER;
+  const all = [...ACTIONS.values()].filter(f);
+  const late = all.filter((a) => actionState(a) === "late").sort((a, b) => actDate(a) - actDate(b));
+  const later = all.filter((a) => actionState(a) === "later").sort((a, b) => a.created - b.created);
+  const planned = all.filter((a) => actionState(a) === "planned").sort((a, b) => actDate(a) - actDate(b));
+  const done = all.filter((a) => a.done).sort((a, b) => b.doneAt - a.doneAt).slice(0, 10);
+  const group = (title, cls, list, drop, emptyTxt) => {
+    const box = h("div", { class: "agroup", "data-drop": drop || null }, h("h3", null, title, h("span", { class: "et " + cls }, String(list.length))));
+    const l = h("div", { class: "alist" }); list.forEach((a) => l.append(actionRow(a))); if (!list.length && emptyTxt) l.append(h("div", { class: "empty-note" }, emptyTxt));
+    box.append(l); return box;
+  };
+  const doneBox = h("details", { class: "agroup" }, h("summary", { class: "hint", style: "cursor:pointer" }, `Faites récemment (${done.length})`), h("div", { class: "alist" }, ...done.map(actionRow)));
+  body.replaceChildren(group("En retard", late.length ? "bad" : "neu", late, null, ""), group("Plus tard", "neu", later, "later", "Dépose une action ici pour la garder sans date."), group("Prévues", "neu", planned, null, ""), doneBox);
+}
+function actionRow(a) {
+  const st = actionState(a), m = member(a.owner);
+  const cb = h("input", { type: "checkbox", "aria-label": "Action faite" }); cb.checked = a.done; on(cb, "change", () => { saveAction(a.id, { done: cb.checked }); render(); });
+  const etat = st === "late" ? h("span", { class: "et bad" }, "✕ En retard") : st === "done" ? h("span", { class: "et ok" }, "✓ Faite") : st === "later" ? h("span", { class: "et neu" }, "– Plus tard") : h("span", { class: "et neu" }, whenLabel(a));
+  const fl = firstLabel(a);
+  return h("div", { class: "aitem" + (a.done ? " done" : ""), draggable: a.done ? null : "true", "data-act": a.id }, cb,
+    on(h("button", { class: "t", type: "button" }, a.text), "click", () => actionWin(a.id)),
+    on(h("button", { class: "btn sm", type: "button", title: "Choisir la semaine et le jour" }, "Planifier"), "click", () => actionWin(a.id)),
+    h("div", { class: "meta" }, etat, st === "late" ? h("span", null, whenLabel(a)) : null, m ? h("span", null, m.name) : h("span", null, "Sans pilote"), fl ? h("span", null, fl) : null));
+}
+function fillPending(box, filt) {
+  const list = [...ACTIONS.values()].filter(filt).sort((a, b) => { const o = { late: 0, planned: 1, later: 2 }; return o[actionState(a)] - o[actionState(b)] || (actDate(a) || 0) - (actDate(b) || 0) || a.created - b.created; });
+  const sig = JSON.stringify(list.map((a) => [a.id, a.text, a.week, a.day, a.done, a.owner]));
+  if (box.dataset.sig === sig) return; box.dataset.sig = sig;
+  box.replaceChildren(...(list.length ? list.map(actionRow) : [h("div", { class: "empty-note" }, "Rien en attente.")]));
+}
+
+/* ——————————— fenêtres ——————————— */
+let WIN_CLOSE = null, LASTFOCUS = null;
+function openWin({ title, body, foot, size, onClose }) {
+  if (WIN_CLOSE) { const f = WIN_CLOSE; WIN_CLOSE = null; f(); }
+  const bg = $("#win-bg");
+  const w = h("div", { class: "win" + (size ? " " + size : ""), role: "dialog", "aria-modal": "true", "aria-label": title });
+  w.append(h("div", { class: "win-head" }, h("h2", null, title), on(h("button", { class: "btn icon ghost", type: "button", "aria-label": "Fermer" }, "✕"), "click", closeWin)),
+    h("div", { class: "win-body" }, ...body.filter(Boolean)));
+  if (foot) w.append(h("div", { class: "win-foot" }, ...foot.filter(Boolean)));
+  if (bg.hidden) LASTFOCUS = document.activeElement;
+  bg.replaceChildren(w); bg.hidden = false; WIN_CLOSE = onClose || null;
+  setTimeout(() => { const f = w.querySelector("[data-autofocus]") || w.querySelector(".win-body input:not([type=checkbox]), .win-body select, .win-body textarea") || w.querySelector(".win-foot .primary"); f && f.focus(); }, 0);
+}
+function closeWin() {
+  const bg = $("#win-bg"); bg.hidden = true; bg.replaceChildren();
+  if (WIN_CLOSE) { const f = WIN_CLOSE; WIN_CLOSE = null; f(); }
+  if (LASTFOCUS && document.contains(LASTFOCUS)) try { LASTFOCUS.focus(); } catch (e) { /* */ }
+}
+on($("#win-bg"), "mousedown", (e) => { if (e.target.id === "win-bg") closeWin(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("#win-bg").hidden) closeWin();
+  else if (!$("#people-pop").hidden) { $("#people-pop").hidden = true; $("#people").focus(); }
+  else if (!$("#drawer").hidden) closeDrawer();
+});
+const sp = () => h("span", { class: "sp" });
+const btn = (label, cls, fn) => on(h("button", { class: "btn " + (cls || ""), type: "button" }, label), "click", fn);
+function confirmWin(title, text, okLabel, danger) {
+  return new Promise((res) => {
+    let answered = false; const end = (v) => { if (answered) return; answered = true; res(v); };
+    openWin({ title, size: "small", body: [h("p", null, text)], foot: [sp(), btn("Annuler", "", () => { end(false); closeWin(); }), btn(okLabel, danger ? "danger" : "primary", () => { end(true); closeWin(); })], onClose: () => end(false) });
+  });
+}
+function infoWin(title, lines) { openWin({ title, size: "small", body: lines.map((l) => h("p", null, l)), foot: [sp(), btn("OK", "primary", closeWin)] }); }
+function segGroup(options, value, onPick) {
+  const g = h("div", { class: "seg", role: "group" });
+  const btns = options.map(([v, label]) => { const b = h("button", { type: "button", "aria-pressed": String(v === value) }, label); on(b, "click", () => { btns.forEach((x) => x.setAttribute("aria-pressed", "false")); b.setAttribute("aria-pressed", "true"); onPick(v); }); return b; });
+  g.append(...btns); return g;
+}
+
+function actionWin(id, preset) {
+  const a = id ? ACTIONS.get(id) : null;
+  const st = { text: a ? a.text : "", owner: a ? a.owner : (preset && preset.owner) || DR_OWNER || meId() || "", week: a ? a.week : (preset && preset.week) || "", day: a ? a.day : (preset && preset.day) || 0, done: a ? a.done : false };
+  const txt = h("input", { class: "inp", maxlength: "300", value: st.text, "data-autofocus": "", "aria-label": "Action" });
+  const own = h("select", { class: "inp", "aria-label": "Pilote" }, h("option", { value: "" }, "Sans pilote"), ...TEAM.map((m) => h("option", { value: m.id }, m.name))); own.value = st.owner;
+  const cur = mondayOf(new Date());
+  const weeks = [["", "Plus tard"]];
+  for (let n = 0; n < 6; n++) { const w = addDays(cur, 7 * n); weeks.push([ymd(w), (n === 0 ? "Cette semaine · " : n === 1 ? "Semaine prochaine · " : "") + "S" + pad(isoWeek(w))]); }
+  if (st.week && !weeks.some(([v]) => v === st.week)) weeks.splice(1, 0, [st.week, weekLabel(st.week)]);
+  const dayBox = h("div", { class: "fld" });
+  const drawDays = () => {
+    dayBox.hidden = !st.week;
+    if (!st.week) return;
+    const w = parseYmd(st.week);
+    dayBox.replaceChildren(h("span", { class: "lb" }, "Jour"), segGroup([[0, "Dans la semaine"], ...[1, 2, 3, 4, 5, 6].slice(0, nDays()).map((d) => [d, `${DSHORT[d - 1]} ${fmtDM(addDays(w, d - 1))}`])], st.day, (v) => { st.day = v; }));
+  };
+  drawDays();
+  const doneCb = h("input", { type: "checkbox", id: "aw-done" }); doneCb.checked = st.done;
+  const fl = a ? firstLabel(a) : "";
+  const save = () => {
+    const t = txt.value.trim(); if (!t) { txt.focus(); toast("Écris l'action avant d'enregistrer.", true); return; }
+    saveAction(id || uid(), { text: t, owner: own.value, week: st.week, day: st.week ? st.day : 0, done: doneCb.checked });
+    closeWin(); render(); toast(st.week ? "Action planifiée : " + whenLabel({ week: st.week, day: st.day }) + "." : "Action gardée pour plus tard.");
+  };
+  on(txt, "keydown", (e) => { if (e.key === "Enter") save(); });
+  const del = a ? btn("Supprimer", "danger", async () => { if (await confirmWin("Supprimer l'action ?", `« ${a.text} » sera supprimée pour toute l'équipe.`, "Supprimer", true)) { emit({ t: "a", m: a.id, v: null }); render(); toast("Action supprimée."); } else actionWin(id); }) : null;
+  openWin({
+    title: a ? "Action" : "Nouvelle action", size: "small",
+    body: [h("label", { class: "fld" }, h("span", { class: "lb" }, "Action"), txt, h("span", { class: "help" }, "Une phrase courte : quoi faire.")),
+      h("label", { class: "fld" }, h("span", { class: "lb" }, "Pilote"), own),
+      h("div", { class: "fld" }, h("span", { class: "lb" }, "Quand"), segGroup(weeks, st.week, (v) => { st.week = v; if (!v) st.day = 0; drawDays(); }), fl ? h("span", { class: "help" }, "Échéance " + fl) : null),
+      dayBox,
+      h("label", { class: "chk", for: "aw-done" }, doneCb, "Action faite")],
+    foot: [del, sp(), btn("Annuler", "", closeWin), btn("Enregistrer", "primary", save)],
+  });
+}
+
+function askName() {
+  return new Promise((res) => {
+    const inp = h("input", { class: "inp", maxlength: "60", placeholder: "Prénom NOM", value: USER, "aria-label": "Ton nom" });
+    const done = (name, id) => {
+      name = String(name || "").trim().replace(/\s+/g, " "); if (!name) { inp.focus(); return; }
+      USER = name; LS.set("user", name);
+      const match = TEAM.find((x) => slug(x.name) === slug(name)); ME = id || (match ? match.id : ""); LS.set("me", ME);
+      closeWin(); STRUCT = ""; TABSIG = ""; render(); res(name);
+    };
+    on(inp, "keydown", (e) => { if (e.key === "Enter") done(inp.value, ""); });
+    const picks = TEAM.length ? h("div", { class: "fld" }, h("span", { class: "lb" }, "Choisis ton nom"), h("div", { class: "seg" }, ...TEAM.map((m) => on(h("button", { type: "button", "aria-pressed": String(m.id === meId()) }, m.name), "click", () => done(m.name, m.id))))) : null;
+    openWin({ title: "Qui es-tu ?", size: "small", onClose: () => res(USER),
+      body: [h("p", null, "Ton nom signe tes saisies et retrouve ta colonne. Il est gardé sur cet appareil."), picks, h("label", { class: "fld" }, h("span", { class: "lb" }, TEAM.length ? "Ou écris-le" : "Prénom NOM"), inp)],
+      foot: [sp(), btn("Plus tard", "", closeWin), btn("Valider", "primary", () => done(inp.value, ""))] });
+  });
+}
+
+function teamWin() {
+  const list = h("div", { style: "display:flex;flex-direction:column;gap:8px" });
+  const draw = () => {
+    list.replaceChildren(...TEAM.map((m, idx) => {
+      const nm = h("input", { class: "inp", maxlength: "60", value: m.name, "aria-label": "Nom" });
+      const em = h("input", { class: "inp", type: "email", maxlength: "120", value: m.email || "", placeholder: "e-mail pour les relances", "aria-label": "E-mail" });
+      const put = (patch) => { emit({ t: "m", m: m.id, v: { name: m.name, email: m.email, order: m.order, ...patch } }); render(); };
+      on(nm, "change", () => { const v = nm.value.trim().replace(/\s+/g, " "); if (v && v !== m.name) put({ name: v }); });
+      on(em, "change", () => { const v = em.value.trim(); if (v !== (m.email || "")) put({ email: v }); });
+      const move = (j) => { const l = TEAM.slice(); [l[idx], l[j]] = [l[j], l[idx]]; l.forEach((x, k) => { if (x.order !== k) emit({ t: "m", m: x.id, v: { name: x.name, email: x.email, order: k } }); }); render(); draw(); };
+      return h("div", { class: "teamrow" }, nm, em, h("div", { class: "ops" },
+        btn("↑", "sm icon", () => move(idx - 1)), btn("↓", "sm icon", () => move(idx + 1)),
+        btn("Retirer", "sm danger", async () => { if (await confirmWin("Retirer de l'équipe ?", `${m.name} n'aura plus de colonne. Ses saisies restent dans le journal.`, "Retirer", true)) { emit({ t: "m", m: m.id, v: null }); render(); toast(`${m.name} retiré(e) de l'équipe.`); } teamWin(); })));
+    }));
+    list.querySelectorAll(".ops").forEach((o, i) => { o.children[0].disabled = i === 0; o.children[1].disabled = i === TEAM.length - 1; });
+  };
+  draw();
+  const nn = h("input", { class: "inp", maxlength: "60", placeholder: "Prénom NOM", "aria-label": "Nom du collaborateur" });
+  const ne = h("input", { class: "inp", type: "email", maxlength: "120", placeholder: "prenom.nom@renault.com", "aria-label": "E-mail du collaborateur" });
+  const add = () => {
+    const name = nn.value.trim().replace(/\s+/g, " "); if (!name) { nn.focus(); return; }
+    const id = uid(); emit({ t: "m", m: id, v: { name, email: ne.value.trim(), order: TEAM.reduce((mx, m) => Math.max(mx, m.order + 1), 0) } });
+    if (!ME && slug(name) === slug(USER)) { ME = id; LS.set("me", ME); }
+    nn.value = ""; ne.value = ""; render(); draw(); nn.focus();
+  };
+  on(nn, "keydown", (e) => { if (e.key === "Enter") add(); }); on(ne, "keydown", (e) => { if (e.key === "Enter") add(); });
+  openWin({ title: "Équipe", body: [h("p", { class: "hint" }, "L'ordre de la liste est l'ordre des colonnes. L'e-mail sert aux relances Teams et Outlook. La liste est partagée avec toute l'équipe."), list,
+    h("div", { class: "fld" }, h("span", { class: "lb" }, "Ajouter une personne"), h("div", { class: "teamrow" }, nn, ne, btn("Ajouter", "primary", add)))],
+    foot: [sp(), btn("Fermer", "primary", closeWin)] });
+  setTimeout(() => nn.focus(), 0);
+}
+
+/* ——————————— Diffuser ——————————— */
+function whatMissing(m) {
+  const parts = [], md = missingDays(m.id), ti = todayIndex();
+  if (missingTop(m.id)) parts.push("ton Top 3 de la semaine");
+  if (md.length === 1 && md[0] === ti) parts.push("ta priorité du jour");
+  else if (md.length) parts.push("ta priorité de " + md.map((i) => DAYS[i - 1].toLowerCase()).join(", "));
+  return parts;
+}
+function whereTxt() { return CLOUD.team && !EXAMPLE ? " : " + teamLink() : ""; }
+const msgFor = (m) => `Bonjour ${firstName(m.name)}, pense à remplir ${whatMissing(m).join(" et ")} dans le suivi d'équipe${whereTxt()}. Merci !`;
+const groupMsg = () => `Bonjour à tous, pensez à remplir votre Top 3 de la semaine et votre priorité du jour dans le suivi d'équipe${whereTxt()}. Merci !`;
+const teamsUrl = (emails, msg) => `https://teams.microsoft.com/l/chat/0/0?users=${emails.map(encodeURIComponent).join(",")}&message=${encodeURIComponent(msg)}`;
+const mailUrl = (emails, msg) => "mailto:" + (emails.length === 1 ? encodeURIComponent(emails[0]) + "?" : "?bcc=" + emails.map(encodeURIComponent).join(",") + "&") + "subject=" + encodeURIComponent("Suivi d'équipe : à remplir") + "&body=" + encodeURIComponent(msg);
+function copy(text) {
+  const ok = () => toast("Message copié : colle-le dans Teams.");
+  try { navigator.clipboard.writeText(text).then(ok, () => infoWin("Message à copier", [text])); } catch (e) { infoWin("Message à copier", [text]); }
+}
+function fixFor(mid) {
+  closeWin(); if (!isCurrentWeek()) goWeek(new Date());
+  setView(mid);
+  setTimeout(() => { const md = missingDays(mid); const f = missingTop(mid) ? ["t1", "t2", "t3"].find((k) => !val(mid, k).trim()) : "p" + md[0]; if (f[0] === "p") { OPENP.add(`${weekKey}|${mid}|${f.slice(1)}`); update(); } const el = REFS[mid] && REFS[mid].fields[f]; if (el) { el.scrollIntoView({ block: "center" }); el.focus({ preventScroll: true }); } }, 30);
+}
+function diffuserWin() {
+  flushEdits();
+  const late = TEAM.filter((m) => missCount(m.id));
+  const rows = TEAM.map((m) => {
+    const mt = missingTop(m.id), md = missingDays(m.id);
+    return h("tr", null, h("td", null, m.name),
+      h("td", null, mt ? h("span", { class: "et bad" }, "✕ incomplet") : h("span", { class: "et ok" }, "✓")),
+      h("td", null, md.length ? h("span", { class: "et bad" }, "✕ " + md.map((i) => DSHORT[i - 1]).join(", ")) : h("span", { class: "et ok" }, "✓")),
+      h("td", { class: "r" }, mt || md.length ? h("span", { class: "ops", style: "justify-content:flex-end" },
+        m.email ? h("a", { class: "btn sm", href: teamsUrl([m.email], msgFor(m)), target: "_blank", rel: "noopener" }, "Relancer") : btn("Copier", "sm", () => copy(msgFor(m))),
+        btn("Corriger", "sm", () => fixFor(m.id))) : ""));
+  });
+  const emails = late.map((m) => m.email).filter(Boolean);
+  const noMail = late.filter((m) => !m.email).length;
+  openWin({
+    title: "Diffuser", size: "large",
+    body: [
+      h("div", null, h("h2", { class: "sec" }, h("span", null, `Tout est prêt ? · semaine ${isoWeek(monday)}`), h("span", { class: "fil" }), h("span", { class: "meta" }, late.length ? `${late.length} personne(s) à relancer` : "tout est rempli")),
+        TEAM.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "Personne"), h("th", null, "Top 3"), h("th", null, "Priorités du jour"), h("th", { class: "r" }, "Action"))), h("tbody", null, ...rows))) : h("p", { class: "empty-note" }, "Ajoute d'abord l'équipe dans ⚙."),
+        h("p", { class: "hint", style: "margin-top:6px" }, `Une case compte à partir de ${cfg("deadline", "09:30").replace(":", "h")} le jour même, seulement si la personne est présente, en télétravail ou en déplacement.`)),
+      late.length ? h("div", null, h("h2", { class: "sec" }, h("span", null, "Relancer"), h("span", { class: "fil" })),
+        h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" },
+          emails.length ? h("a", { class: "btn primary", href: teamsUrl(emails, groupMsg()), target: "_blank", rel: "noopener" }, `Relancer sur Teams (${emails.length})`) : null,
+          emails.length ? h("a", { class: "btn", href: mailUrl(emails, groupMsg()) }, "E-mail groupé") : null,
+          btn("Copier le message", "", () => copy(groupMsg()))),
+        noMail ? h("p", { class: "hint", style: "margin-top:6px" }, `${noMail} personne(s) sans e-mail : ajoute-le dans ⚙ > Équipe pour la relancer en un clic.`) : null) : null,
+      h("div", null, h("h2", { class: "sec" }, h("span", null, "Exports pour Excel"), h("span", { class: "fil" })),
+        h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn(`Semaine ${isoWeek(monday)} (CSV)`, "", exportWeek), btn("Actions (CSV)", "", exportActions)),
+        h("p", { class: "hint", style: "margin-top:6px" }, "Enregistrés dans Téléchargements, à ouvrir avec Excel."))],
+    foot: [sp(), btn("Fermer", "primary", closeWin)],
+  });
+}
+function csvCell(v) { let s = v == null ? "" : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; }
+const csv = (rows) => new Blob(["﻿" + rows.map((r) => r.map(csvCell).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+async function exportWeek() {
+  flushEdits();
+  const rows = [["Semaine", "Personne", "Ligne", "Date", "Présence", "Texte", "Jours prévus", "État"]];
+  const sem = "S" + pad(isoWeek(monday)) + " " + monday.getFullYear();
+  for (const m of TEAM) {
+    for (let k = 1; k <= 3; k++) rows.push([sem, m.name, "Objectif " + k, "", "", val(m.id, "t" + k), daysOf(m.id, k).map((d) => DSHORT[d - 1]).join(", "), val(m.id, "d" + k) === "1" ? "Atteint" : ""]);
+    for (let i = 1; i <= nDays(); i++) rows.push([sem, m.name, DAYS[i - 1], fmtDate(addDays(monday, i - 1)), status(m.id, i), val(m.id, "p" + i), "", missingDays(m.id).includes(i) ? "Manquant" : ""]);
+  }
+  const where = await saveOut("Exports", `Suivi_Top3_S${pad(isoWeek(monday))}_${ymd(new Date())}.csv`, csv(rows));
+  toast("Export de la semaine enregistré " + where + ".");
+}
+async function exportActions() {
+  const st = { done: "Faite", late: "En retard", later: "Plus tard", planned: "Prévue" };
+  const rows = [["Action", "Pilote", "Semaine", "Jour", "Date prévue", "Échéance initiale", "État", "Créée le", "Modifiée par"]];
+  for (const a of [...ACTIONS.values()].sort((x, y) => x.created - y.created)) {
+    const d = a.week && a.day ? addDays(parseYmd(a.week), a.day - 1) : null;
+    const [fw, fd] = (a.first || "").split("|");
+    rows.push([a.text, (member(a.owner) || {}).name || "", a.week ? weekLabel(a.week) : "", a.day ? DAYS[a.day - 1] : "", d ? fmtDate(d) : "", fw ? weekLabel(fw) + (+fd ? " " + DSHORT[+fd - 1] : "") : "", st[actionState(a)], a.created ? fmtDate(new Date(a.created)) : "", a._by]);
+  }
+  const where = await saveOut("Exports", `Suivi_Top3_Actions_${ymd(new Date())}.csv`, csv(rows));
+  toast("Export des actions enregistré " + where + ".");
+}
+
+/* ——————————— ⚙ Paramètres ——————————— */
+async function backup() {
+  flushEdits();
+  let events;
+  try { events = await fetchAll(); } catch (e) { toast("Sauvegarde impossible : " + errText(e) + ".", true); return; }
+  const now = new Date();
+  const name = `Sauvegarde_Suivi_Top3_equipe_${ymd(now)}_${pad(now.getHours())}h${pad(now.getMinutes())}.json`;
+  const body = JSON.stringify({ app: APP.name, ver: APP.ver, schema: APP.schema, saved: Date.now(), by: USER, team: CLOUD.teamName, events });
+  const where = saveOut("Sauvegardes", name, new Blob([body], { type: "application/json" }));
+  LS.set("lastBackup", Date.now());
+  toast(`Sauvegarde complète (${events.length} éléments) enregistrée ${where}.`);
+}
+function restorePick() {
+  if (CLOUD.state !== "team" || EXAMPLE) { infoWin("Ouvre d'abord l'équipe", ["La restauration écrit dans l'équipe en ligne : ouvre son lien, puis recommence."]); return; }
+  const fi = h("input", { type: "file", accept: ".json,application/json", hidden: true });
+  on(fi, "change", async () => {
+    const f = fi.files && fi.files[0]; fi.remove(); if (!f) return;
+    let j; try { j = JSON.parse(await f.text()); } catch (e) { infoWin("Fichier illisible", ["Ce fichier n'est pas une sauvegarde de l'appli (JSON attendu)."]); return; }
+    const evs = (j && Array.isArray(j.events) ? j.events : []).filter(validEv);
+    if (!evs.length) { infoWin("Rien à restaurer", ["Aucune donnée de l'appli dans ce fichier. Choisis un fichier « Sauvegarde_Suivi_Top3_equipe_… .json » (versions 1.x acceptées)."]); return; }
+    let cur; try { cur = computeState(await fetchAll()).last; } catch (e) { toast("Lecture de l'équipe impossible : " + errText(e) + ".", true); return; }
+    const best = computeState(evs).last;   // une seule saisie par case dans le fichier
+    let add = 0, repl = 0, skip = 0; const keep = [];
+    for (const e of best.values()) { const c = cur.get(evKey(e)); if (!c) { add++; keep.push(e); } else if (newer(e, c)) { repl++; keep.push(e); } else skip++; }
+    openWin({ title: "Ouvrir / restaurer", size: "small",
+      body: [h("p", null, `Sauvegarde du ${j.saved ? fmtDate(new Date(j.saved)) + " à " + hhmm(j.saved) : "?"}${j.by ? " par " + j.by : ""}, vers l'équipe « ${CLOUD.teamName} ».`),
+        h("div", { class: "kv" }, h("span", null, "Ajoutés"), h("span", null, String(add)), h("span", null, "Plus récents, remplacent"), h("span", null, String(repl)), h("span", null, "Déjà présents ou plus anciens"), h("span", null, String(skip) + " (ignorés)")),
+        h("p", { class: "hint" }, "Rien n'est écrasé par une donnée plus ancienne.")],
+      foot: [sp(), btn("Annuler", "", closeWin), btn("Restaurer", "primary", async () => {
+        closeWin();
+        const { doc, writeBatch } = CLOUD.api;
+        try {
+          for (let i = 0; i < keep.length; i += 400) {
+            const b = writeBatch(CLOUD.db);
+            keep.slice(i, i + 400).forEach((e) => b.set(doc(CLOUD.db, "teams", CLOUD.team, ...docPath(e)), clean(e)));
+            await b.commit();
+          }
+          keep.forEach((e) => EVENTS.set(evKey(e), e)); replay(); render();
+          toast(`Restauration faite : ${add + repl} élément(s).`);
+        } catch (e) { toast("Restauration interrompue : " + errText(e) + ".", true); }
+      })] });
+  });
+  document.body.append(fi); fi.click();
+}
+const TESTS = [
+  ["Semaine ISO du 12/11/2026 = S46", () => isoWeek(new Date(2026, 10, 12)) === 46],
+  ["Lundi de la semaine du dimanche 15/11/2026 = 09/11/2026", () => ymd(mondayOf(new Date(2026, 10, 15))) === "2026-11-09"],
+  ["Pâques 2027 = 28/03/2027, lundi 29/03 férié", () => ymd(easter(2027)) === "2027-03-28" && holidayName(new Date(2027, 2, 29)) === "Lundi de Pâques"],
+  ["Ascension 2026 = jeudi 14/05/2026", () => holidayName(new Date(2026, 4, 14)) === "Ascension"],
+  ["Pour une même case, la saisie la plus récente gagne", () => computeState([{ id: "b", ts: 2, t: "f", w: "2026-11-09", m: "x", f: "p1", v: "récent" }, { id: "a", ts: 1, t: "f", w: "2026-11-09", m: "x", f: "p1", v: "ancien" }]).data.get("2026-11-09|x").p1 === "récent"],
+  ["Un Top prévu ce jour compte comme priorité du jour ; une case vide sans Top ne compte pas", () => prioOk("", 1) && prioOk("Réunion", 0) && !prioOk("   ", 0)],
+  ["CSV : formule neutralisée, guillemets doublés", () => csvCell("=1+1") === "\"'=1+1\"" && csvCell('a"b') === '"a""b"'],
+  ["Action prévue lundi 06/01/2020, non faite = en retard ; sans date = plus tard ; faite = faite", () => actionState({ week: "2020-01-06", day: 1, done: false }) === "late" && actionState({ week: "", day: 0, done: false }) === "later" && actionState({ week: "2020-01-06", day: 1, done: true }) === "done"],
+];
+function settingsWin() {
+  const name = h("input", { class: "inp", maxlength: "60", value: USER, placeholder: "Prénom NOM", "aria-label": "Ton nom" });
+  on(name, "change", () => { const v = name.value.trim().replace(/\s+/g, " "); if (!v || v === USER) return; USER = v; LS.set("user", v); const m = TEAM.find((x) => slug(x.name) === slug(v)); ME = m ? m.id : ""; LS.set("me", ME); STRUCT = ""; TABSIG = ""; render(); toast("Nom enregistré sur cet appareil."); });
+  const teamTxt = CLOUD.state === "team" ? `Équipe « ${CLOUD.teamName} » · saisies en direct` : CLOUD.state === "noconfig" ? "Site non relié à Firebase : voir README." : CLOUD.state === "error" ? "Connexion impossible : " + CLOUD.err + "." : "Aucune équipe ouverte sur cet appareil.";
+  const teamBtns = CLOUD.state === "team" ? [btn("Lien à partager", "sm primary", () => teamLinkWin(false)), btn("Quitter sur cet appareil", "sm danger", async () => { if (await confirmWin("Quitter l'équipe sur cet appareil ?", "Le tableau ne s'affichera plus ici. Rien n'est effacé : tu reviens en rouvrant le lien de l'équipe.", "Quitter", true)) leaveTeam(); else settingsWin(); })]
+    : CLOUD.api ? [btn("Créer l'équipe", "sm primary", () => { closeWin(); createTeamWin(); }), btn("J'ai un lien d'équipe", "sm", () => { closeWin(); joinWin(); })] : [];
+  const lb = LS.get("lastBackup", 0), old = !lb || Date.now() - lb > 30 * 864e5;
+  const deadline = h("input", { class: "inp", type: "time", value: cfg("deadline", "09:30"), style: "max-width:140px", "aria-label": "Heure limite" });
+  on(deadline, "change", () => { if (/^\d{2}:\d{2}$/.test(deadline.value)) { emit({ t: "c", f: "deadline", v: deadline.value }); render(); toast("Heure limite : " + deadline.value.replace(":", "h") + " pour toute l'équipe."); } });
+  const sat = h("input", { type: "checkbox", id: "cfg-sat" }); sat.checked = showSat();
+  on(sat, "change", () => { emit({ t: "c", f: "samedi", v: sat.checked ? "oui" : "non" }); STRUCT = ""; render(); });
+  const y = monday.getFullYear();
+  const testList = h("ul", { class: "tests" });
+  const runTests = () => { testList.replaceChildren(...TESTS.map(([l, fn]) => { let ok = false; try { ok = !!fn(); } catch (e) { ok = false; } return h("li", null, h("span", { class: "et " + (ok ? "ok" : "bad") }, ok ? "✓" : "✕"), l); })); };
+  openWin({
+    title: "Paramètres",
+    body: [
+      h("label", { class: "fld" }, h("span", { class: "lb" }, "Ton nom"), name, h("span", { class: "help" }, "Il signe tes saisies et retrouve ta colonne. Gardé sur cet appareil.")),
+      h("div", { class: "fld" }, h("span", { class: "lb" }, "Équipe en ligne"), h("span", { class: "help" }, teamTxt), h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, ...teamBtns)),
+      h("div", { class: "fld" }, h("span", { class: "lb" }, "Sauvegarde"), h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn("Enregistrer", "sm", backup), btn("Ouvrir / restaurer", "sm", () => { closeWin(); restorePick(); })),
+        h("span", { class: "help", style: old ? "color:var(--t-orange);font-weight:700" : null }, lb ? `Dernière sauvegarde complète : ${fmtDate(new Date(lb))}${old ? " (plus de 30 jours)" : ""}.` : "Aucune sauvegarde complète faite depuis cet appareil.")),
+      h("div", { class: "fld" }, h("span", { class: "lb" }, "Équipe"), h("span", { class: "help" }, `${TEAM.length} personne(s), liste partagée.`), h("div", null, btn("Gérer l'équipe", "sm", teamWin))),
+      h("div", { class: "fld" }, h("span", { class: "lb" }, "Aide et version"), h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn("Aide", "sm", () => helpWin()), btn("Quoi de neuf", "sm", () => helpWin("news"))), h("span", { class: "help" }, `Version ${APP.ver} · ${APP.service}`)),
+      h("details", { class: "adv" }, h("summary", null, "Réglages avancés"),
+        h("div", { style: "display:flex;flex-direction:column;gap:18px" },
+          h("label", { class: "fld" }, h("span", { class: "lb" }, "Heure limite de saisie (toute l'équipe)"), deadline, h("span", { class: "help" }, "Une case vide passe en rouge à partir de cette heure, le jour même. Par défaut 09:30.")),
+          h("label", { class: "chk", for: "cfg-sat", style: "color:var(--ink)" }, sat, "Afficher le samedi (facultatif, jamais compté en manquant)"),
+          h("div", { class: "fld" }, h("span", { class: "lb" }, `Jours fériés ${y}`), h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "Date"), h("th", null, "Jour férié"))), h("tbody", null, ...holidays(y).map(([d, n]) => h("tr", null, h("td", null, fmtDate(d)), h("td", null, n)))))),
+            h("span", { class: "help" }, "Source : Code du travail, art. L3133-1. Pâques calculé (algorithme de Meeus). Un férié travaillé se règle par personne : présence « Présent »." )),
+          h("div", { class: "fld" }, h("span", { class: "lb" }, "Exemple"), h("div", null, btn("Charger un exemple", "sm", () => { closeWin(); loadExample(); })), h("span", { class: "help" }, "Données fictives pour découvrir l'appli ; rien n'est enregistré.")),
+          h("div", { class: "fld" }, h("span", { class: "lb" }, "Auto-contrôle"), h("div", null, btn("Lancer les tests", "sm", runTests)), testList,
+            h("span", { class: "help" }, "Tests de l'appli sur des valeurs connues. Les 5 tests du socle du gabarit v1.5 ne sont pas inclus (gabarit non fourni)."))))],
+    foot: [sp(), btn("Fermer", "primary", closeWin)],
+  });
+}
+
+/* ——————————— Aide ——————————— */
+function helpWin(anchor) {
+  const sec = (id, title, ...kids) => h("section", { id: "aide-" + id, class: "help-doc" }, h("h3", null, title), ...kids);
+  const li = (...k) => h("li", null, ...k);
+  const toc = [["sert", "À quoi sert l'appli"], ["debut", "Premiers pas"], ["jour", "Au quotidien"], ["attente", "Actions en attente"], ["diffuser", "Diffuser"], ["partage", "Partage"], ["questions", "Questions fréquentes"], ["news", "Quoi de neuf"]];
+  openWin({
+    title: "Aide · mode d'emploi", size: "large",
+    body: [
+      h("nav", { class: "toc", "aria-label": "Sommaire" }, ...toc.map(([id, t]) => on(h("a", { href: "#aide-" + id }, t), "click", (e) => { e.preventDefault(); const s = document.getElementById("aide-" + id); s && s.scrollIntoView({ block: "start" }); }))),
+      sec("sert", "À quoi sert l'appli", h("p", null, "Chaque collaborateur écrit son Top 3 de la semaine, coche les jours où il le traite (L M M J V S) et remplit sa priorité du jour. Le responsable voit ce qui manque et relance en un clic. Pour qui : l'équipe. Durée : 1 minute par jour.")),
+      sec("debut", "Premiers pas", h("ol", null, li("Le responsable crée l'équipe une fois (⚙ > Équipe en ligne > Créer l'équipe) et envoie le lien aux collègues."), li("Chacun ouvre le lien et écrit son nom. Aucun compte à créer."), li("⚙ > Gérer l'équipe : ajoute les personnes avec leur e-mail (une seule fois pour toute l'équipe)."), li("Pour découvrir sans risque : ⚙ > Réglages avancés > Charger un exemple."))),
+      sec("jour", "Au quotidien", h("ul", null,
+        li(h("b", null, "Onglets"), " : « Équipe » montre tout le monde ; « Ma semaine » et l'onglet de chaque personne montrent son plan, jour par jour. Le chiffre rouge = cases à remplir."),
+        li(h("b", null, "Priorité du jour"), " : clic sur le petit « + » pour ouvrir la case ; Entrée pour valider. Quittée vide, elle se referme. Un jour travaillé, après 9h30, le « + » devient « + À remplir » en rouge."),
+        li(h("b", null, "Jours prévus"), " : sous chaque objectif, coche L M M J V S ; l'objectif apparaît en étiquette dans la case du jour et compte comme priorité de ce jour : la case se replie en un petit « + », à cliquer pour ajouter une autre priorité. Clic sur l'étiquette : modifier l'objectif."),
+        li(h("b", null, "Objectif atteint"), " : clic sur le numéro (il passe en vert ✓)."),
+        li(h("b", null, "Présence"), " : Congé, Absent, Formation, Repos ou Férié : la case du jour disparaît et rien n'est compté manquant."),
+        li(h("b", null, "Code couleur"), " : chaque statut a sa couleur, en liseré à gauche de la case (légende sous les tuiles). « Masquer les présences » enlève les listes et les couleurs sur ton appareil ; les absences restent prises en compte."),
+        li(h("b", null, "Masquer"), " : ✕ sur une colonne, ou bouton « Personnes » (Moi seulement, Tout afficher). Ce choix ne concerne que ton appareil."))),
+      sec("attente", "Actions en attente", h("ul", null,
+        li("Bouton « En attente » : la liste de toutes les actions non faites, en retard d'abord."),
+        li("Glisse une action sur un jour du tableau ou d'un onglet pour la planifier ; dépose-la sur « Plus tard » pour la garder sans date."),
+        li("« Planifier » : choisis une autre semaine (jusqu'à 5 semaines) et le jour. L'échéance initiale reste affichée."),
+        li("Dans un onglet personne : « + Action » sur un jour, et « Mettre en attente » pour reporter une priorité."))),
+      sec("diffuser", "Diffuser", h("p", null, "Le bouton jaune affiche le nombre de points manquants. Il ouvre « Tout est prêt ? » (qui n'a pas rempli quoi, avec Corriger), les relances Teams ou Outlook avec le message déjà écrit, et les exports CSV pour Excel.")),
+      sec("partage", "Partage", h("ol", null, li("Le suivi est un site web : on l'ouvre avec le lien de l'équipe, sur PC (Edge, Chrome) comme sur téléphone."), li("Aucun compte : le site se connecte tout seul, de façon anonyme. Le lien contient la clé de l'équipe : ne l'envoie qu'aux membres."), li("Les saisies de chacun arrivent en direct chez les autres."), li("Hors ligne, tu peux continuer : tes saisies partent au retour du réseau."), li("Raccourci : favori du navigateur, ou « Ajouter à l'écran d'accueil » sur téléphone."))),
+      sec("questions", "Questions fréquentes", h("ul", null,
+        li(h("b", null, "Je ne vois pas la saisie d'un collègue ?"), " Vérifie l'état en haut à droite : « Hors ligne » ou une erreur empêche la mise à jour. Sinon, recharge la page."),
+        li(h("b", null, "Deux personnes modifient la même case ?"), " La saisie la plus récente gagne."),
+        li(h("b", null, "Sur téléphone ?"), " Oui : ouvre le lien, l'onglet « Ma semaine » s'affiche en cartes."),
+        li(h("b", null, "J'ai changé de PC ou de téléphone ?"), " Ouvre le lien de l'équipe et écris ton nom ; tout revient."),
+        li(h("b", null, "Le site ne se connecte pas au travail ?"), " Le réseau de l'entreprise bloque peut-être Firebase : à vérifier avec l'informatique."))),
+      sec("news", "Quoi de neuf", ...Object.entries(NEWS).flatMap(([v, items], i) => [h("p", { style: i ? "margin-top:6px" : null }, h("b", null, "Version " + v)), h("ul", null, ...items.map((n) => li(n)))]))],
+    foot: [sp(), btn("Fermer", "primary", closeWin)],
+  });
+  LS.set("seenVer", APP.ver);
+  if (anchor) setTimeout(() => { const s = document.getElementById("aide-" + anchor); s && s.scrollIntoView({ block: "start" }); }, 50);
+}
+
+/* ——————————— Exemple ——————————— */
+function loadExample() {
+  if (EXAMPLE) return;
+  flushEdits();
+  EXAMPLE = { EVENTS, VIEW, HIDDEN };
+  EVENTS = new Map(); HIDDEN = new Set();
+  const cur = mondayOf(new Date()), w = ymd(cur), prev = ymd(addDays(cur, -7)), nxt = ymd(addDays(cur, 7));
+  let ts = 1;
+  const put = (e) => { e.id = "ex" + ts; e.ts = ts++; e.by = "Exemple"; EVENTS.set(evKey(e), e); };
+  const people = [["exa", "Julie MARTIN"], ["exb", "Karim BENALI"], ["exc", "Léa ROUSSEL"], ["exd", "Hugo PETIT"]];
+  people.forEach(([id, name], i) => put({ t: "m", m: id, v: { name, email: "", order: i } }));
+  const f = (m, fld, v) => put({ t: "f", w, m, f: fld, v });
+  f("exa", "t1", "Valider le plan de charge des AMR"); f("exa", "j1", "1,3"); f("exa", "t2", "Former 2 caristes à la ligne d'échange"); f("exa", "j2", "4"); f("exa", "t3", "Clore les écarts de l'audit 5S"); f("exa", "j3", "5"); f("exa", "d1", "1");
+  f("exb", "t1", "Réception des conteneurs semaine 47"); f("exb", "j1", "2"); f("exb", "t2", "Mettre à jour les étiquettes Data Matrix"); f("exb", "j2", "3,4");
+  f("exc", "t1", "Préparer la revue projet de vendredi"); f("exc", "j1", "5"); f("exc", "t2", "Relancer le fournisseur de bacs"); f("exc", "t3", "Plan de formation T1");
+  f("exd", "s1", "Congé"); f("exd", "s2", "Congé");
+  const ti = ((new Date().getDay() + 6) % 7) + 1;
+  for (let i = 1; i < Math.min(ti, 6); i++) { f("exa", "p" + i, ["Plan de charge AMR", "Point sécurité début de poste", "Arbitrage plan de charge", "Formation caristes", "Audit 5S zone BDC"][i - 1]); if (i % 2) f("exc", "p" + i, ["Revue des écarts", "", "Relance fournisseur bacs", "", "Revue projet"][i - 1]); }
+  const act = (id, text, owner, week, day, done) => put({ t: "a", m: id, v: { text, owner, week, day, done: !!done, doneAt: done ? Date.now() : 0, first: week ? `${week}|${day}` : "", created: ts } });
+  act("xa1", "Commander 20 bacs KLT pour la zone BDC", "exb", prev, 4, false);
+  act("xa2", "Mettre à jour la cartographie RCS", "exa", "", 0, false);
+  act("xa3", "Planifier l'audit 5S du magasin", "exc", "", 0, false);
+  act("xa4", "Point fournisseur Hikrobot", "exa", w, Math.min(Math.max(ti, 1), 5), false);
+  act("xa5", "Envoyer le compte rendu de la revue", "exc", nxt, 1, false);
+  act("xa6", "Vérifier les badges visiteurs", "exb", w, 1, true);
+  ME = ""; VIEW = "team"; replay(); STRUCT = ""; TABSIG = ""; render(); window.scrollTo({ top: 0 });
+}
+function quitExample() {
+  if (!EXAMPLE) return;
+  ({ EVENTS, VIEW, HIDDEN } = EXAMPLE); EXAMPLE = null; ME = LS.get("me", "");
+  replay(); STRUCT = ""; TABSIG = ""; render(); toast("Exemple fermé : tes données sont revenues.");
+}
+
+/* ——————————— messages, navigation ——————————— */
+let toastTimer = null;
+function toast(msg, bad) { const t = $("#toast"); t.textContent = msg; t.className = bad ? "bad" : ""; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 7000 : 4000); }
+function goWeek(d) { flushEdits(); monday = mondayOf(d); weekKey = ymd(monday); STRUCT = ""; TABSIG = ""; subscribeWeek(); render(); }
+on($("#prev"), "click", () => goWeek(addDays(monday, -7)));
+on($("#next"), "click", () => goWeek(addDays(monday, 7)));
+on($("#thisweek"), "click", () => goWeek(new Date()));
+on($("#diffuser"), "click", diffuserWin);
+on($("#aide"), "click", () => helpWin());
+on($("#reglages"), "click", settingsWin);
+on($("#state"), "click", () => { if (EXAMPLE) return; if (CLOUD.state === "team") { if (CLOUD.err) location.reload(); else toast($("#state").title || "En ligne."); } else if (CLOUD.state === "error") location.reload(); else if (CLOUD.state === "ready") createTeamWin(); else settingsWin(); });
+on($("#totop"), "click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+window.addEventListener("scroll", () => { $("#totop").hidden = window.scrollY < 300; }, { passive: true });
+
+/* ——————————— démarrage ——————————— */
+async function init() {
+  replay();
+  applyPres();
+  render();
+  setInterval(() => { update(); renderBanner(); setStateTxt(); }, 30000);
+  window.addEventListener("online", () => { setStateTxt(); renderBanner(); });
+  window.addEventListener("offline", () => { setStateTxt(); renderBanner(); });
+  window.addEventListener("hashchange", () => { const t = teamFromHash(); if (t && t !== CLOUD.team && CLOUD.api) joinTeam(t); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushEdits(); });
+  window.addEventListener("beforeunload", () => { flushEdits(); });
+  await cloudStart();
+  if (!USER && CLOUD.state === "team") setTimeout(() => { if (!USER && $("#win-bg").hidden) askName(); }, 400);
+}
+init();
+</script>
+</body>
+</html>
