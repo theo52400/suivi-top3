@@ -14,7 +14,7 @@ Accès      : une équipe = un identifiant secret de 24 caractères dans le lien
              personne ne peut lire ni écrire (règles Firestore : pas de liste des équipes).
 Données    : un document par case ; la dernière saisie remplace la précédente.
              teams/{équipe} {name, created, by} · members/{id} t:"m" {name,email,order} | null
-             actions/{id} t:"a" {text,owner,week,day,done,first,created} | null · config/{clé} t:"c" (deadline, samedi)
+             actions/{id} t:"a" {text,owner,week,day,done,first,created} | null · config/{clé} t:"c" (deadline, samedi ; grp_* = groupe {name, members, extra})
              cells/{lundi}_{membre}_{champ} t:"f" : f = t1-3 objectif, j1-3 jours prévus, d1-3 atteint,
              s1-6 présence, p1-6 priorité du jour ; lu semaine par semaine (where w == lundi).
              Format d'événement identique aux versions 1.x : une sauvegarde 1.x se restaure dans le site.
@@ -25,7 +25,8 @@ Règles     : une case est en rouge si elle est vide après l'heure limite (9h30
 Sorties    : sauvegardes JSON et exports CSV dans Téléchargements.
 Tests      : ⚙ > Réglages avancés > Auto-contrôle (8 tests de l'appli). Tests du socle du gabarit v1.5 : gabarit non fourni.
 Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (13/11/2026) site web Firebase + GitHub Pages,
-             sans compte, temps réel, téléphone.
+             sans compte, temps réel, téléphone · 2.1 (16/11/2026) pleine largeur, colonnes égales, retour à la ligne,
+             groupes (filtre) et listes de diffusion.
 -->
 <style>
 /* Rendu du service (chapitre R du standard) : barre du haut, cadre à coins coupés, titres à carré jaune. */
@@ -40,6 +41,7 @@ Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (
   --tint-y:#FFF5D6; --tint-g:#E3F4EA; --tint-o:#FDEBD3; --tint-r:#FBE7E5;
   --head-bg:#1C1F24; --head-fg:#FFFFFF; --shade:rgba(0,0,0,.55);
   --font:Aptos,Calibri,"Segoe UI",Arial,sans-serif;
+  --maxw:2400px;   /* la page suit la largeur de l'écran */
   color-scheme:light;
 }
 @media (prefers-color-scheme: dark){:root{
@@ -60,7 +62,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 
 /* barre du haut */
 .appbar{position:sticky;top:0;z-index:30;background:var(--card);border-bottom:1px solid var(--line)}
-.appbar .in{max-width:1120px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap}
+.appbar .in{max-width:var(--maxw);margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap}
 .appname{font-size:14pt;font-weight:700;color:var(--ink);line-height:1.15}
 .appver{font-size:9.5pt;color:var(--gray)}
 .appbar .grow{flex:1}
@@ -86,7 +88,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 /* bandeau unique */
 #banner{display:none}
 #banner.on{display:block}
-#banner .in{max-width:1120px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;font-weight:600}
+#banner .in{max-width:var(--maxw);margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;font-weight:600}
 #banner .grow{flex:1}
 #banner.b-red{background:var(--tint-r);border-bottom:2px solid var(--red)}
 #banner.b-orange{background:#E3870B;color:#1C1F24}
@@ -94,7 +96,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 #banner.b-yellow{background:var(--tint-y);border-bottom:2px solid var(--yellow)}
 
 /* page */
-.page{max-width:1120px;margin:0 auto;padding:16px 16px 72px}
+.page{max-width:var(--maxw);margin:0 auto;padding:16px 16px 72px}
 .toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 14px;margin-bottom:14px}
 .tabs{display:flex;gap:2px;overflow-x:auto;flex:1 1 360px;min-width:0;border-bottom:1px solid var(--line);scrollbar-width:thin}
 .tab{height:42px;padding:0 12px;border:0;border-bottom:3px solid transparent;background:none;font-weight:700;font-size:10.5pt;color:var(--gray);cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
@@ -108,6 +110,18 @@ button,input,select,textarea{font:inherit;color:inherit}
 .wkbadge{height:30px;min-width:44px;padding:0 6px;background:#1C1F24;color:#FFCC33;font-weight:700;display:inline-flex;align-items:center;justify-content:center;border-radius:2px}
 .range{font-size:10pt;color:var(--gray);white-space:nowrap}
 .popwrap{position:relative}
+.grpseg{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.grpseg .lbl{font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--gray);margin-right:2px}
+.gchip{height:32px;padding:0 12px;border:1.5px solid var(--line);border-radius:16px;background:var(--card);color:var(--ink);font-weight:700;font-size:10pt;cursor:pointer;white-space:nowrap}
+.gchip:hover{border-color:var(--ink)}
+.gchip.on{background:var(--yellow);border-color:var(--ink);color:#1C1F24}
+.grpcard{border:1px solid var(--line);border-top:3px solid var(--yellow);padding:12px;display:flex;flex-direction:column;gap:10px}
+.grpcard .hd{display:flex;gap:8px;align-items:center}
+.grpcard .hd .inp{flex:1}
+.mchips{display:flex;flex-wrap:wrap;gap:6px}
+.mchips label{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:16px;padding:4px 10px;cursor:pointer;font-size:10pt}
+.mchips label:has(input:checked){background:var(--tint-y);border-color:var(--ink);font-weight:700}
+.mchips input{width:16px;height:16px;accent-color:#1C1F24;margin:0}
 .pop{position:absolute;right:0;top:calc(100% + 6px);z-index:40;background:var(--card);border:1.5px solid var(--ink);border-radius:4px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:12px;width:270px;display:flex;flex-direction:column;gap:8px}
 .pop .row{display:flex;gap:6px;flex-wrap:wrap}
 .pop label{display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer}
@@ -146,7 +160,8 @@ button.tile:hover{filter:brightness(.98)}
 
 /* tableau équipe */
 .board-scroll{overflow-x:auto;border:1px solid var(--line)}
-table.board{border-collapse:separate;border-spacing:0;width:100%;font-size:10.5pt}
+table.board{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;font-size:10.5pt}
+.board col.c-rh{width:112px}
 .board th,.board td{border-bottom:1px solid var(--line);border-left:1px solid var(--line);vertical-align:top;text-align:left;padding:0}
 .board tr>*:first-child{border-left:0}
 .board tbody tr:last-child>*{border-bottom:0}
@@ -157,7 +172,7 @@ table.board{border-collapse:separate;border-spacing:0;width:100%;font-size:10.5p
 .rh .dt{display:block;font-size:9pt;color:var(--gray)}
 .rh .tg{display:inline-block;margin-top:6px;font-size:8.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.06em;background:var(--yellow);color:#1C1F24;padding:0 5px;border-radius:2px}
 .rh .ho{display:block;margin-top:4px;font-size:9pt;color:var(--gray);font-style:italic}
-.board .ph{min-width:230px;padding:10px 10px 10px 12px}
+.board .ph{padding:10px 10px 10px 12px}
 .ph .top{display:flex;align-items:flex-start;gap:6px}
 .ph .nm{flex:1;min-width:0;background:none;border:0;padding:0;color:inherit;text-align:left;cursor:pointer;font-weight:700;font-size:10pt;text-transform:uppercase;letter-spacing:.06em;overflow-wrap:anywhere}
 .ph .nm:hover{text-decoration:underline}
@@ -167,7 +182,7 @@ table.board{border-collapse:separate;border-spacing:0;width:100%;font-size:10.5p
 .ph.me{box-shadow:inset 0 -4px 0 #FFCC33}
 tr.today>td,tr.today>.rh{background:var(--tint-y)}
 tr.off>td{background:var(--block)}
-td.c{min-width:230px}
+td.c{min-width:0;overflow-wrap:anywhere}
 .cell{display:flex;flex-direction:column;gap:6px;padding:8px 10px}
 .board td.off-cell{background:var(--block)}
 td.miss .case{border-color:var(--red);background:var(--tint-r)}
@@ -205,7 +220,7 @@ body:not(.pres-on) select.pres,body:not(.pres-on) .legend{display:none}
 .num{width:22px;height:22px;margin-top:9px;background:#1C1F24;color:#FFCC33;border:0;border-radius:2px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:10pt;cursor:pointer;padding:0}
 .num.done{background:#1E9E5A;color:#fff}
 @media (prefers-color-scheme: dark){.num,.pchip .n,.wkbadge,.step .sq{box-shadow:inset 0 0 0 1px #5B616B}}
-.t3row .inp{height:40px}
+textarea.obj{display:block;height:auto;min-height:40px;resize:none;overflow:hidden;padding:9px 10px;line-height:1.35;field-sizing:content}
 .daypick{display:flex;gap:3px;margin-top:4px}
 .daypick label{position:relative;cursor:pointer}
 .daypick input{position:absolute;opacity:0;width:1px;height:1px}
@@ -224,11 +239,11 @@ body:not(.pres-on) select.pres,body:not(.pres-on) .legend{display:none}
 .pplus:hover{border-style:solid;border-color:var(--ink);color:var(--ink);background:var(--card)}
 .pplus.need{height:28px;padding:0 10px;font-size:9.5pt;border:1px solid var(--red);background:var(--tint-r);color:var(--t-red)}
 .pplus.need:hover{border-color:var(--red);color:var(--t-red);background:var(--tint-r);filter:brightness(.97)}
-.pchip{display:flex;align-items:center;gap:7px;width:100%;min-width:0;background:var(--block);border:0;border-radius:3px;padding:3px 8px 3px 3px;font-size:9.5pt;color:var(--text);text-align:left;cursor:pointer}
+.pchip{display:flex;align-items:flex-start;gap:7px;width:100%;min-width:0;background:var(--block);border:0;border-radius:3px;padding:3px 8px 3px 3px;font-size:9.5pt;color:var(--text);text-align:left;cursor:pointer}
 tr.today .pchip,.daycard.today .pchip{background:var(--card)}
-.pchip .n{width:18px;height:18px;flex:none;background:#1C1F24;color:#FFCC33;border-radius:2px;display:inline-flex;align-items:center;justify-content:center;font-size:8.5pt;font-weight:700}
+.pchip .n{width:18px;height:18px;flex:none;margin-top:1px;background:#1C1F24;color:#FFCC33;border-radius:2px;display:inline-flex;align-items:center;justify-content:center;font-size:8.5pt;font-weight:700}
 .pchip.done .n{background:#1E9E5A;color:#fff}
-.pchip .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pchip .t{min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:1.35}
 .pchip:hover .t{text-decoration:underline}
 .act{display:flex;align-items:flex-start;gap:7px;font-size:9.5pt;padding:2px 2px 2px 3px;border-radius:3px}
 .act[draggable="true"]{cursor:grab}
@@ -368,7 +383,7 @@ details.adv[open] summary{margin-bottom:14px}
   <div class="in">
     <div>
       <div class="appname">Suivi Top 3 équipe</div>
-      <div class="appver" id="appver">Version 2.0 · PE Batilly - PE Logistique</div>
+      <div class="appver" id="appver">Version 2.1 · PE Batilly - PE Logistique</div>
     </div>
     <span class="grow"></span>
     <button class="state" id="state" type="button"><span class="dot"></span><span class="txt">Connexion…</span></button>
@@ -391,6 +406,7 @@ details.adv[open] summary{margin-bottom:14px}
         <button class="btn sm" id="thisweek" type="button">Aujourd'hui</button>
       </div>
       <button class="btn sm" id="prestoggle" type="button" aria-pressed="true" title="Afficher ou masquer les présences et leurs couleurs (sur cet appareil)">Masquer les présences</button>
+      <div class="grpseg" id="grpseg" role="group" aria-label="Filtrer par groupe" hidden></div>
       <div class="popwrap">
         <button class="btn sm" id="people" type="button" aria-haspopup="true" aria-expanded="false">Personnes</button>
         <div class="pop" id="people-pop" hidden></div>
@@ -409,8 +425,12 @@ details.adv[open] summary{margin-bottom:14px}
 
 <script>
 "use strict";
-const APP = { name: "Suivi Top 3 équipe", ver: "2.0", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
+const APP = { name: "Suivi Top 3 équipe", ver: "2.1", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
 const NEWS = {
+  "2.1": ["La page occupe toute la largeur de l'écran ; les colonnes ont toutes la même largeur.",
+    "Les textes longs (objectifs, étiquettes) passent à la ligne dans la case au lieu d'être coupés.",
+    "Groupes (ex. Tôlerie, Montage) : un clic au-dessus du tableau n'affiche que leurs colonnes.",
+    "Listes de diffusion : dans Diffuser, un Teams ou un e-mail à tout un groupe en un clic."],
   "2.0": ["Site web : on l'ouvre avec un lien, sur PC comme sur téléphone, sans compte ni dossier partagé.",
     "Les saisies de l'équipe arrivent en direct, et l'appli marche hors ligne (envoi au retour du réseau).",
     "Le lien de l'équipe se partage depuis ⚙ ; les relances Teams l'incluent."],
@@ -426,7 +446,7 @@ const NEWS = {
     "Objectif « atteint », Diffuser (tout est prêt ?, relances, exports CSV), sauvegarde et restauration, exemple."],
   "1.0": ["Tableau partagé par dossier Teams : présence, Top 3 avec jours, priorité du jour, relances."],
 };
-const NEWS_SHORT = "le suivi devient un site web : un lien, sans compte, sur PC et téléphone, saisies en direct";
+const NEWS_SHORT = "pleine largeur, colonnes égales, groupes (Tôlerie, Montage…) et listes de diffusion";
 const STATUSES = ["Présent", "Télétravail", "Déplacement", "Formation", "Congé", "Absent", "Repos", "Férié"];
 const WORKING = new Set(["Présent", "Télétravail", "Déplacement"]);
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
@@ -499,10 +519,11 @@ const FIREBASE_VER = "10.12.2";
    teams/{équipe}                      { name, created, by }
    teams/{équipe}/members/{membre}     événement t:"m"
    teams/{équipe}/actions/{action}     événement t:"a"
-   teams/{équipe}/config/{réglage}     événement t:"c"
+   teams/{équipe}/config/{réglage}     événement t:"c" (deadline, samedi ; grp_* = groupe {name, members, extra})
    teams/{équipe}/cells/{w}_{m}_{f}    événement t:"f" (lu semaine par semaine : where w == lundi)   */
 let EVENTS = new Map();
-let TEAM = [], DATA = new Map(), ACTIONS = new Map(), CFG = {};
+let TEAM = [], DATA = new Map(), ACTIONS = new Map(), CFG = {}, GROUPS = new Map();
+let FILTER = LS.get("filter", "");
 let LASTSAVE = 0, LASTSYNC = 0, PENDINGW = 0;
 let EXAMPLE = null;
 const CLOUD = { state: "init", err: "", api: null, db: null, team: LS.get("team", ""), teamName: LS.get("teamName", ""), unsub: [], weekUnsub: null, weekSub: "" };
@@ -512,7 +533,7 @@ function validEv(e) {
   if (!e || typeof e.id !== "string" || typeof e.ts !== "number") return false;
   if (e.t === "f") return typeof e.m === "string" && /^[A-Za-z0-9]{1,40}$/.test(e.m) && /^\d{4}-\d{2}-\d{2}$/.test(e.w) && /^[tjspd][1-6]$/.test(e.f) && typeof e.v === "string";
   if (e.t === "m" || e.t === "a") return typeof e.m === "string" && /^[A-Za-z0-9]{1,40}$/.test(e.m);
-  if (e.t === "c") return CFG_KEYS.includes(e.f) && typeof e.v === "string";
+  if (e.t === "c") return (CFG_KEYS.includes(e.f) && typeof e.v === "string") || (isGrp(e.f) && (e.v === null || (typeof e.v === "object" && !Array.isArray(e.v))));
   return false;
 }
 const newer = (a, b) => a.ts > b.ts || (a.ts === b.ts && a.id > b.id);
@@ -525,16 +546,26 @@ function cleanAction(v) {
 function computeState(iter) {
   const last = new Map();
   for (const e of iter) { const k = evKey(e), c = last.get(k); if (!c || newer(e, c)) last.set(k, e); }
-  const team = new Map(), data = new Map(), actions = new Map(), cfg = {};
+  const team = new Map(), data = new Map(), actions = new Map(), cfg = {}, groups = new Map();
   for (const e of last.values()) {
     if (e.t === "m") { if (e.v && typeof e.v === "object" && e.v.name) team.set(e.m, { id: e.m, name: String(e.v.name).slice(0, 60), email: String(e.v.email || "").slice(0, 120), order: Number(e.v.order) || 0 }); }
     else if (e.t === "f") { const k = e.w + "|" + e.m; let o = data.get(k); if (!o) data.set(k, (o = {})); o[e.f] = e.v.slice(0, 500); }
     else if (e.t === "a") { const a = cleanAction(e.v); if (a) actions.set(e.m, { ...a, id: e.m, _ts: e.ts, _by: e.by || "" }); }
+    else if (e.t === "c" && isGrp(e.f)) { const g = cleanGroup(e.v); if (g) groups.set(e.f, { ...g, id: e.f }); }
     else if (e.t === "c") cfg[e.f] = e.v;
   }
-  return { last, team: [...team.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "fr")), data, actions, cfg };
+  return { last, team: [...team.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "fr")), data, actions, cfg, groups };
 }
-function replay() { const s = computeState(EVENTS.values()); TEAM = s.team; DATA = s.data; ACTIONS = s.actions; CFG = s.cfg; }
+function replay() { const s = computeState(EVENTS.values()); TEAM = s.team; DATA = s.data; ACTIONS = s.actions; CFG = s.cfg; GROUPS = s.groups; if (FILTER && !GROUPS.has(FILTER)) FILTER = ""; }
+// groupes : filtre des colonnes et listes de diffusion (partagés avec l'équipe)
+const isGrp = (f) => typeof f === "string" && /^grp_[A-Za-z0-9]{4,30}$/.test(f);
+function cleanGroup(v) {
+  if (!v || typeof v !== "object" || typeof v.name !== "string" || !v.name.trim()) return null;
+  return { name: v.name.trim().slice(0, 40), members: Array.isArray(v.members) ? v.members.filter((x) => typeof x === "string" && /^[A-Za-z0-9]{1,40}$/.test(x)).slice(0, 100) : [], extra: typeof v.extra === "string" ? v.extra.slice(0, 600) : "" };
+}
+const groupList = () => [...GROUPS.values()].sort((a, b) => a.name.localeCompare(b.name, "fr"));
+const parseMails = (txt) => String(txt || "").split(/[\s;,]+/).map((x) => x.trim()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+function groupEmails(g) { const out = new Set(); for (const id of g.members) { const m = member(id); if (m && m.email) out.add(m.email); } parseMails(g.extra).forEach((x) => out.add(x)); return [...out]; }
 function docPath(e) {
   if (e.t === "f") return ["cells", `${e.w}_${e.m}_${e.f}`];
   if (e.t === "c") return ["config", e.f];
@@ -689,7 +720,9 @@ const missCount = (mid) => missingDays(mid).length + (missingTop(mid) ? 1 : 0);
 const isCurrentWeek = () => ymd(mondayOf(new Date())) === weekKey;
 function todayIndex() { if (!isCurrentWeek()) return 0; const i = ((new Date().getDay() + 6) % 7) + 1; return i <= 6 ? i : 0; }
 function meId() { if (ME && TEAM.some((m) => m.id === ME)) return ME; const s = slug(USER); const m = TEAM.find((x) => slug(x.name) === s); return m ? m.id : ""; }
-const visibleTeam = () => TEAM.filter((m) => !HIDDEN.has(m.id));
+const inFilter = (id) => !FILTER || !GROUPS.has(FILTER) || GROUPS.get(FILTER).members.includes(id);
+const filteredTeam = () => TEAM.filter((m) => inFilter(m.id));            // groupe choisi
+const visibleTeam = () => filteredTeam().filter((m) => !HIDDEN.has(m.id)); // groupe choisi, sans les personnes masquées
 const member = (id) => TEAM.find((m) => m.id === id);
 
 function edit(mid, f, v, now) {
@@ -815,7 +848,8 @@ function renderToolbar() {
   const np = pendingActions().length, nl = lateActions().length;
   const pb = $("#pending"); pb.replaceChildren("En attente");
   if (np) pb.append(h("span", { class: nl ? "cnt" : "pastille" }, String(np)));
-  let miss = 0; for (const m of TEAM) miss += missCount(m.id);
+  let miss = 0; for (const m of filteredTeam()) miss += missCount(m.id);
+  renderGroupChips();
   const pa = $("#pastille"); pa.hidden = !miss; pa.textContent = String(miss);
   $("#diffuser").title = miss ? `${miss} point(s) manquant(s) cette semaine` : "Tout est rempli";
 }
@@ -856,7 +890,7 @@ function caseField(m, i) {
   return el;
 }
 function objField(m, k) {
-  const el = h("input", { type: "text", class: "inp obj", maxlength: "160", id: `t${k}__${m.id}`, "data-mid": m.id, "data-f": "t" + k, placeholder: "Objectif " + k, "aria-label": `${m.name} – objectif ${k}` });
+  const el = h("textarea", { class: "inp obj", rows: "1", maxlength: "160", id: `t${k}__${m.id}`, "data-mid": m.id, "data-f": "t" + k, placeholder: "Objectif " + k, "aria-label": `${m.name} – objectif ${k}` });
   REFS[m.id].fields["t" + k] = el;
   return el;
 }
@@ -926,7 +960,8 @@ function teamView() {
     }
     tb.append(tr);
   }
-  const table = h("table", { class: "board" }, h("thead", null, hr), tb);
+  // colonnes de même largeur ; au-delà de l'écran, le tableau défile dans son cadre
+  const table = h("table", { class: "board", style: `min-width:${112 + list.length * 220}px` }, h("colgroup", null, h("col", { class: "c-rh" }), ...list.map(() => h("col"))), h("thead", null, hr), tb);
   return [head, tiles, legend(), h("div", { class: "board-scroll" }, table), h("p", { class: "hint", style: "margin-top:10px" }, "Clic sur un nom : son plan de la semaine. Les actions en attente se glissent sur un jour.")];
 }
 
@@ -1134,7 +1169,7 @@ on(viewEl, "change", (e) => {
   else if (t.dataset.f) edit(t.dataset.mid, t.dataset.f, t.value, true);
 });
 on(viewEl, "click", (e) => { const b = e.target.closest && e.target.closest("button.num"); if (b) { const mid = b.dataset.mid, k = b.dataset.done; setField(mid, "d" + k, val(mid, "d" + k) === "1" ? "" : "1"); } });
-on(viewEl, "keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && e.target.classList && e.target.classList.contains("case")) { e.preventDefault(); e.target.blur(); } });
+on(viewEl, "keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && e.target.classList && (e.target.classList.contains("case") || e.target.classList.contains("obj"))) { e.preventDefault(); e.target.blur(); } });
 on(viewEl, "focusout", (e) => {
   const t = e.target; if (!(t.dataset && t.dataset.mid && t.dataset.f)) return;
   const k = pkey(t.dataset.mid, t.dataset.f); if (PEND.has(k)) commit(k);
@@ -1174,6 +1209,19 @@ on($("#prestoggle"), "click", () => {
   toast(SHOW_PRES ? "Présences affichées, avec leur code couleur." : "Présences masquées sur cet appareil. Les absences restent prises en compte dans les cases à remplir.");
 });
 
+/* ——————————— groupes : filtre en un clic ——————————— */
+let GSIG = "";
+function setFilter(id) { FILTER = id; LS.set("filter", id); STRUCT = ""; TABSIG = ""; GSIG = ""; if (VIEW !== "team" && !visibleTeam().some((m) => m.id === VIEW)) VIEW = "team"; render(); }
+function renderGroupChips() {
+  const box = $("#grpseg"); if (!box) return;
+  const list = groupList().filter((g) => g.members.some((id) => member(id)));
+  const sig = FILTER + "#" + list.map((g) => g.id + g.name + g.members.length).join(",");
+  if (sig === GSIG) return; GSIG = sig;
+  box.hidden = !list.length;
+  const chip = (id, label, title) => on(h("button", { class: "gchip" + (FILTER === id ? " on" : ""), type: "button", "aria-pressed": String(FILTER === id), title }, label), "click", () => setFilter(FILTER === id && id ? "" : id));
+  box.replaceChildren(h("span", { class: "lbl" }, "Groupe"), chip("", "Tous", "Toute l'équipe"), ...list.map((g) => chip(g.id, g.name, `${g.members.filter((id) => member(id)).length} personne(s)`)));
+}
+
 /* ——————————— masquer des personnes ——————————— */
 function hidePerson(id) { HIDDEN.add(id); LS.set("hidden", [...HIDDEN]); if (VIEW === id) VIEW = "team"; STRUCT = ""; TABSIG = ""; render(); toast(`${(member(id) || {}).name || "Personne"} masqué(e). Bouton « Personnes » pour l'afficher.`); }
 function renderPeoplePop() {
@@ -1183,7 +1231,8 @@ function renderPeoplePop() {
   pop.replaceChildren(h("div", { class: "hint" }, "Personnes affichées sur cet appareil"),
     ...(rows.length ? rows : [h("div", { class: "empty-note" }, "Aucune personne dans l'équipe.")]),
     h("div", { class: "row" }, on(h("button", { class: "btn sm", type: "button" }, "Tout afficher"), "click", () => set([])),
-      me ? on(h("button", { class: "btn sm", type: "button" }, "Moi seulement"), "click", () => set(TEAM.filter((m) => m.id !== me).map((m) => m.id))) : null));
+      me ? on(h("button", { class: "btn sm", type: "button" }, "Moi seulement"), "click", () => set(TEAM.filter((m) => m.id !== me).map((m) => m.id))) : null),
+    on(h("button", { class: "btn sm", type: "button" }, "Gérer les groupes"), "click", () => { $("#people-pop").hidden = true; groupsWin(); }));
 }
 on($("#people"), "click", (e) => { e.stopPropagation(); const pop = $("#people-pop"); const open = pop.hidden; pop.hidden = !open; $("#people").setAttribute("aria-expanded", String(open)); if (open) { renderPeoplePop(); const f = pop.querySelector("input,button"); f && f.focus(); } });
 document.addEventListener("click", (e) => { const pop = $("#people-pop"); if (!pop.hidden && !e.target.closest(".popwrap")) { pop.hidden = true; $("#people").setAttribute("aria-expanded", "false"); } });
@@ -1366,6 +1415,39 @@ function teamWin() {
   setTimeout(() => nn.focus(), 0);
 }
 
+/* ——————————— groupes et listes de diffusion ——————————— */
+function groupsWin() {
+  const box = h("div", { style: "display:flex;flex-direction:column;gap:12px" });
+  const put = (g, patch) => { emit({ t: "c", f: g.id, v: { name: g.name, members: g.members, extra: g.extra, ...patch } }); render(); };
+  const draw = () => {
+    const list = groupList();
+    box.replaceChildren(...(list.length ? list.map((g) => {
+      const nm = h("input", { class: "inp", maxlength: "40", value: g.name, "aria-label": "Nom du groupe" });
+      on(nm, "change", () => { const v = nm.value.trim().replace(/\s+/g, " "); if (v && v !== g.name) put(GROUPS.get(g.id), { name: v }); });
+      const chips = h("div", { class: "mchips", role: "group", "aria-label": "Membres du groupe" }, ...TEAM.map((m) => {
+        const cb = h("input", { type: "checkbox", id: `g_${g.id}_${m.id}` }); cb.checked = g.members.includes(m.id);
+        on(cb, "change", () => { const cur = GROUPS.get(g.id); const set = new Set(cur.members); cb.checked ? set.add(m.id) : set.delete(m.id); put(cur, { members: TEAM.map((x) => x.id).filter((id) => set.has(id)) }); });
+        return h("label", { for: cb.id }, cb, m.name);
+      }));
+      const ex = h("input", { class: "inp", maxlength: "600", value: g.extra, placeholder: "Autres adresses hors équipe, séparées par ; (facultatif)", "aria-label": "Autres adresses" });
+      on(ex, "change", () => { if (ex.value !== GROUPS.get(g.id).extra) put(GROUPS.get(g.id), { extra: ex.value.trim() }); });
+      const del = btn("Supprimer", "sm danger", async () => { if (await confirmWin("Supprimer le groupe ?", `Le groupe « ${g.name} » disparaît pour toute l'équipe. Les personnes et leurs saisies ne sont pas touchées.`, "Supprimer", true)) { emit({ t: "c", f: g.id, v: null }); if (FILTER === g.id) setFilter(""); render(); toast(`Groupe « ${g.name} » supprimé.`); } groupsWin(); });
+      const nMail = groupEmails(g).length;
+      return h("div", { class: "grpcard" }, h("div", { class: "hd" }, nm, del), chips, ex,
+        h("span", { class: "hint" }, `${g.members.length} personne(s) de l'équipe · ${nMail} adresse(s) pour la diffusion`));
+    }) : [h("p", { class: "empty-note" }, "Aucun groupe pour l'instant. Exemple : « Tôlerie » et « Montage », ou une liste « Chefs d'atelier » pour la diffusion.")]));
+  };
+  draw();
+  const nn = h("input", { class: "inp", maxlength: "40", placeholder: "ex. Tôlerie", "aria-label": "Nom du nouveau groupe" });
+  const add = () => { const n = nn.value.trim().replace(/\s+/g, " "); if (!n) { nn.focus(); return; } emit({ t: "c", f: "grp_" + randomId(10), v: { name: n, members: [], extra: "" } }); nn.value = ""; render(); draw(); };
+  on(nn, "keydown", (e) => { if (e.key === "Enter") add(); });
+  openWin({ title: "Groupes et listes de diffusion",
+    body: [h("p", { class: "hint" }, "Un groupe sert deux fois : le bouton du groupe au-dessus du tableau n'affiche que ses colonnes, et Diffuser lui envoie un Teams ou un e-mail en un clic. Les groupes sont partagés avec toute l'équipe."),
+      box, h("div", { class: "fld" }, h("span", { class: "lb" }, "Nouveau groupe"), h("div", { class: "teamrow", style: "grid-template-columns:minmax(0,1fr) auto" }, nn, btn("Créer le groupe", "primary", add)))],
+    foot: [sp(), btn("Fermer", "primary", closeWin)] });
+  setTimeout(() => nn.focus(), 0);
+}
+
 /* ——————————— Diffuser ——————————— */
 function whatMissing(m) {
   const parts = [], md = missingDays(m.id), ti = todayIndex();
@@ -1390,8 +1472,9 @@ function fixFor(mid) {
 }
 function diffuserWin() {
   flushEdits();
-  const late = TEAM.filter((m) => missCount(m.id));
-  const rows = TEAM.map((m) => {
+  const people = filteredTeam(), gName = FILTER && GROUPS.has(FILTER) ? GROUPS.get(FILTER).name : "";
+  const late = people.filter((m) => missCount(m.id));
+  const rows = people.map((m) => {
     const mt = missingTop(m.id), md = missingDays(m.id);
     return h("tr", null, h("td", null, m.name),
       h("td", null, mt ? h("span", { class: "et bad" }, "✕ incomplet") : h("span", { class: "et ok" }, "✓")),
@@ -1405,8 +1488,8 @@ function diffuserWin() {
   openWin({
     title: "Diffuser", size: "large",
     body: [
-      h("div", null, h("h2", { class: "sec" }, h("span", null, `Tout est prêt ? · semaine ${isoWeek(monday)}`), h("span", { class: "fil" }), h("span", { class: "meta" }, late.length ? `${late.length} personne(s) à relancer` : "tout est rempli")),
-        TEAM.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "Personne"), h("th", null, "Top 3"), h("th", null, "Priorités du jour"), h("th", { class: "r" }, "Action"))), h("tbody", null, ...rows))) : h("p", { class: "empty-note" }, "Ajoute d'abord l'équipe dans ⚙."),
+      h("div", null, h("h2", { class: "sec" }, h("span", null, `Tout est prêt ? · semaine ${isoWeek(monday)}${gName ? " · " + gName : ""}`), h("span", { class: "fil" }), h("span", { class: "meta" }, late.length ? `${late.length} personne(s) à relancer` : "tout est rempli")),
+        people.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "Personne"), h("th", null, "Top 3"), h("th", null, "Priorités du jour"), h("th", { class: "r" }, "Action"))), h("tbody", null, ...rows))) : h("p", { class: "empty-note" }, "Ajoute d'abord l'équipe dans ⚙."),
         h("p", { class: "hint", style: "margin-top:6px" }, `Une case compte à partir de ${cfg("deadline", "09:30").replace(":", "h")} le jour même, seulement si la personne est présente, en télétravail ou en déplacement.`)),
       late.length ? h("div", null, h("h2", { class: "sec" }, h("span", null, "Relancer"), h("span", { class: "fil" })),
         h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" },
@@ -1414,11 +1497,34 @@ function diffuserWin() {
           emails.length ? h("a", { class: "btn", href: mailUrl(emails, groupMsg()) }, "E-mail groupé") : null,
           btn("Copier le message", "", () => copy(groupMsg()))),
         noMail ? h("p", { class: "hint", style: "margin-top:6px" }, `${noMail} personne(s) sans e-mail : ajoute-le dans ⚙ > Équipe pour la relancer en un clic.`) : null) : null,
+      listsBlock(),
       h("div", null, h("h2", { class: "sec" }, h("span", null, "Exports pour Excel"), h("span", { class: "fil" })),
         h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn(`Semaine ${isoWeek(monday)} (CSV)`, "", exportWeek), btn("Actions (CSV)", "", exportActions)),
         h("p", { class: "hint", style: "margin-top:6px" }, "Enregistrés dans Téléchargements, à ouvrir avec Excel."))],
     foot: [sp(), btn("Fermer", "primary", closeWin)],
   });
+}
+const listTeamsUrl = (emails, name, msg) => `https://teams.microsoft.com/l/chat/0/0?users=${emails.map(encodeURIComponent).join(",")}&topicName=${encodeURIComponent(name)}` + (msg ? `&message=${encodeURIComponent(msg)}` : "");
+const listMailUrl = (emails, name, msg) => `mailto:${emails.map(encodeURIComponent).join(";")}?subject=${encodeURIComponent("Suivi d'équipe · " + name)}` + (msg ? `&body=${encodeURIComponent(msg)}` : "");
+function listsBlock() {
+  const list = groupList();
+  const msg = h("textarea", { class: "inp", rows: "2", maxlength: "500", placeholder: "Message (facultatif) : pré-rempli dans Teams et dans l'e-mail", "aria-label": "Message", style: "height:auto;min-height:60px;padding:8px 10px;resize:vertical" });
+  const links = [];
+  const rows = list.map((g) => {
+    const emails = groupEmails(g), noMail = g.members.filter((id) => { const m = member(id); return m && !m.email; }).length;
+    const t = h("a", { class: "btn sm primary", target: "_blank", rel: "noopener" }, "Teams"), m = h("a", { class: "btn sm" }, "E-mail");
+    links.push([g, emails, t, m]);
+    const cp = btn("Copier les adresses", "sm", () => { const txt = emails.join("; "); try { navigator.clipboard.writeText(txt).then(() => toast(`${emails.length} adresse(s) copiée(s).`), () => infoWin("Adresses", [txt])); } catch (e) { infoWin("Adresses", [txt]); } });
+    return h("tr", null, h("td", null, h("b", null, g.name)), h("td", null, `${emails.length} adresse(s)` + (noMail ? ` · ${noMail} sans e-mail` : "")),
+      h("td", { class: "r" }, emails.length ? h("span", { class: "ops", style: "justify-content:flex-end;flex-wrap:wrap" }, t, m, cp) : h("span", { class: "hint" }, "aucune adresse")));
+  });
+  const refresh = () => { const v = msg.value.trim(); for (const [g, emails, t, m] of links) { t.href = listTeamsUrl(emails, g.name, v); m.href = listMailUrl(emails, g.name, v); } };
+  on(msg, "input", refresh); refresh();
+  return h("div", null, h("h2", { class: "sec" }, h("span", null, "Listes de diffusion"), h("span", { class: "fil" }), h("span", { class: "meta" }, `${list.length} liste(s)`)),
+    list.length ? h("div", { style: "display:flex;flex-direction:column;gap:10px" }, msg,
+      h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "Liste"), h("th", null, "Destinataires"), h("th", { class: "r" }, "Envoyer"))), h("tbody", null, ...rows))),
+      h("p", { class: "hint" }, "Teams ouvre une conversation de groupe nommée comme la liste ; l'e-mail s'ouvre dans Outlook. Une personne sans e-mail n'est pas incluse.")) : h("p", { class: "empty-note" }, "Aucune liste. Crée des groupes (ex. Tôlerie, Montage, Chefs d'atelier) pour envoyer un Teams ou un e-mail en un clic."),
+    h("div", { style: "margin-top:8px" }, btn("Gérer les groupes et listes", "sm", () => { closeWin(); groupsWin(); })));
 }
 function csvCell(v) { let s = v == null ? "" : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; }
 const csv = (rows) => new Blob(["﻿" + rows.map((r) => r.map(csvCell).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
@@ -1521,6 +1627,7 @@ function settingsWin() {
       h("div", { class: "fld" }, h("span", { class: "lb" }, "Sauvegarde"), h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn("Enregistrer", "sm", backup), btn("Ouvrir / restaurer", "sm", () => { closeWin(); restorePick(); })),
         h("span", { class: "help", style: old ? "color:var(--t-orange);font-weight:700" : null }, lb ? `Dernière sauvegarde complète : ${fmtDate(new Date(lb))}${old ? " (plus de 30 jours)" : ""}.` : "Aucune sauvegarde complète faite depuis cet appareil.")),
       h("div", { class: "fld" }, h("span", { class: "lb" }, "Équipe"), h("span", { class: "help" }, `${TEAM.length} personne(s), liste partagée.`), h("div", null, btn("Gérer l'équipe", "sm", teamWin))),
+      h("div", { class: "fld" }, h("span", { class: "lb" }, "Groupes et listes de diffusion"), h("span", { class: "help" }, `${GROUPS.size} groupe(s) : filtre des colonnes et envoi Teams ou e-mail en un clic.`), h("div", null, btn("Gérer les groupes", "sm", groupsWin))),
       h("div", { class: "fld" }, h("span", { class: "lb" }, "Aide et version"), h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn("Aide", "sm", () => helpWin()), btn("Quoi de neuf", "sm", () => helpWin("news"))), h("span", { class: "help" }, `Version ${APP.ver} · ${APP.service}`)),
       h("details", { class: "adv" }, h("summary", null, "Réglages avancés"),
         h("div", { style: "display:flex;flex-direction:column;gap:18px" },
@@ -1553,13 +1660,14 @@ function helpWin(anchor) {
         li(h("b", null, "Objectif atteint"), " : clic sur le numéro (il passe en vert ✓)."),
         li(h("b", null, "Présence"), " : Congé, Absent, Formation, Repos ou Férié : la case du jour disparaît et rien n'est compté manquant."),
         li(h("b", null, "Code couleur"), " : chaque statut a sa couleur, en liseré à gauche de la case (légende sous les tuiles). « Masquer les présences » enlève les listes et les couleurs sur ton appareil ; les absences restent prises en compte."),
-        li(h("b", null, "Masquer"), " : ✕ sur une colonne, ou bouton « Personnes » (Moi seulement, Tout afficher). Ce choix ne concerne que ton appareil."))),
+        li(h("b", null, "Masquer"), " : ✕ sur une colonne, ou bouton « Personnes » (Moi seulement, Tout afficher). Ce choix ne concerne que ton appareil."),
+        li(h("b", null, "Groupes"), " : les boutons « Tous », « Tôlerie », « Montage »… au-dessus du tableau n'affichent que les colonnes du groupe. On les crée dans ⚙ > Groupes et listes ; ils sont partagés avec l'équipe."))),
       sec("attente", "Actions en attente", h("ul", null,
         li("Bouton « En attente » : la liste de toutes les actions non faites, en retard d'abord."),
         li("Glisse une action sur un jour du tableau ou d'un onglet pour la planifier ; dépose-la sur « Plus tard » pour la garder sans date."),
         li("« Planifier » : choisis une autre semaine (jusqu'à 5 semaines) et le jour. L'échéance initiale reste affichée."),
         li("Dans un onglet personne : « + Action » sur un jour, et « Mettre en attente » pour reporter une priorité."))),
-      sec("diffuser", "Diffuser", h("p", null, "Le bouton jaune affiche le nombre de points manquants. Il ouvre « Tout est prêt ? » (qui n'a pas rempli quoi, avec Corriger), les relances Teams ou Outlook avec le message déjà écrit, et les exports CSV pour Excel.")),
+      sec("diffuser", "Diffuser", h("p", null, "Le bouton jaune affiche le nombre de points manquants. Il ouvre « Tout est prêt ? » (qui n'a pas rempli quoi, avec Corriger, pour le groupe choisi), les relances Teams ou Outlook avec le message déjà écrit, les listes de diffusion (Teams ou e-mail à tout un groupe, message facultatif) et les exports CSV pour Excel.")),
       sec("partage", "Partage", h("ol", null, li("Le suivi est un site web : on l'ouvre avec le lien de l'équipe, sur PC (Edge, Chrome) comme sur téléphone."), li("Aucun compte : le site se connecte tout seul, de façon anonyme. Le lien contient la clé de l'équipe : ne l'envoie qu'aux membres."), li("Les saisies de chacun arrivent en direct chez les autres."), li("Hors ligne, tu peux continuer : tes saisies partent au retour du réseau."), li("Raccourci : favori du navigateur, ou « Ajouter à l'écran d'accueil » sur téléphone."))),
       sec("questions", "Questions fréquentes", h("ul", null,
         li(h("b", null, "Je ne vois pas la saisie d'un collègue ?"), " Vérifie l'état en haut à droite : « Hors ligne » ou une erreur empêche la mise à jour. Sinon, recharge la page."),
@@ -1578,13 +1686,16 @@ function helpWin(anchor) {
 function loadExample() {
   if (EXAMPLE) return;
   flushEdits();
-  EXAMPLE = { EVENTS, VIEW, HIDDEN };
-  EVENTS = new Map(); HIDDEN = new Set();
+  EXAMPLE = { EVENTS, VIEW, HIDDEN, FILTER };
+  EVENTS = new Map(); HIDDEN = new Set(); FILTER = "";
   const cur = mondayOf(new Date()), w = ymd(cur), prev = ymd(addDays(cur, -7)), nxt = ymd(addDays(cur, 7));
   let ts = 1;
   const put = (e) => { e.id = "ex" + ts; e.ts = ts++; e.by = "Exemple"; EVENTS.set(evKey(e), e); };
   const people = [["exa", "Julie MARTIN"], ["exb", "Karim BENALI"], ["exc", "Léa ROUSSEL"], ["exd", "Hugo PETIT"]];
-  people.forEach(([id, name], i) => put({ t: "m", m: id, v: { name, email: "", order: i } }));
+  people.forEach(([id, name], i) => put({ t: "m", m: id, v: { name, email: `${name.split(" ")[0].toLowerCase()}@exemple.fr`, order: i } }));
+  put({ t: "c", f: "grp_exTole", v: { name: "Tôlerie", members: ["exa", "exb"], extra: "" } });
+  put({ t: "c", f: "grp_exMont", v: { name: "Montage", members: ["exc", "exd"], extra: "" } });
+  put({ t: "c", f: "grp_exChef", v: { name: "Chefs d'atelier", members: ["exa"], extra: "chef.tolerie@exemple.fr; chef.montage@exemple.fr" } });
   const f = (m, fld, v) => put({ t: "f", w, m, f: fld, v });
   f("exa", "t1", "Valider le plan de charge des AMR"); f("exa", "j1", "1,3"); f("exa", "t2", "Former 2 caristes à la ligne d'échange"); f("exa", "j2", "4"); f("exa", "t3", "Clore les écarts de l'audit 5S"); f("exa", "j3", "5"); f("exa", "d1", "1");
   f("exb", "t1", "Réception des conteneurs semaine 47"); f("exb", "j1", "2"); f("exb", "t2", "Mettre à jour les étiquettes Data Matrix"); f("exb", "j2", "3,4");
@@ -1603,7 +1714,7 @@ function loadExample() {
 }
 function quitExample() {
   if (!EXAMPLE) return;
-  ({ EVENTS, VIEW, HIDDEN } = EXAMPLE); EXAMPLE = null; ME = LS.get("me", "");
+  ({ EVENTS, VIEW, HIDDEN, FILTER } = EXAMPLE); EXAMPLE = null; GSIG = ""; ME = LS.get("me", "");
   replay(); STRUCT = ""; TABSIG = ""; render(); toast("Exemple fermé : tes données sont revenues.");
 }
 
