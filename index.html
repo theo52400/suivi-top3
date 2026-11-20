@@ -26,7 +26,7 @@ Sorties    : sauvegardes JSON et exports CSV dans Téléchargements.
 Tests      : ⚙ > Réglages avancés > Auto-contrôle (8 tests de l'appli). Tests du socle du gabarit v1.5 : gabarit non fourni.
 Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (13/11/2026) site web Firebase + GitHub Pages,
              sans compte, temps réel, téléphone · 2.1 (16/11/2026) pleine largeur, colonnes égales, retour à la ligne,
-             groupes (filtre) et listes de diffusion.
+             groupes (filtre) et listes de diffusion · 2.2 (20/11/2026) correction du doublon à la création d'une action.
 -->
 <style>
 /* Rendu du service (chapitre R du standard) : barre du haut, cadre à coins coupés, titres à carré jaune. */
@@ -383,7 +383,7 @@ details.adv[open] summary{margin-bottom:14px}
   <div class="in">
     <div>
       <div class="appname">Suivi Top 3 équipe</div>
-      <div class="appver" id="appver">Version 2.1 · PE Batilly - PE Logistique</div>
+      <div class="appver" id="appver">Version 2.2 · PE Batilly - PE Logistique</div>
     </div>
     <span class="grow"></span>
     <button class="state" id="state" type="button"><span class="dot"></span><span class="txt">Connexion…</span></button>
@@ -425,8 +425,9 @@ details.adv[open] summary{margin-bottom:14px}
 
 <script>
 "use strict";
-const APP = { name: "Suivi Top 3 équipe", ver: "2.1", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
+const APP = { name: "Suivi Top 3 équipe", ver: "2.2", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
 const NEWS = {
+  "2.2": ["Correction : « + Action » sur un jour créait l'action en double après Entrée."],
   "2.1": ["La page occupe toute la largeur de l'écran ; les colonnes ont toutes la même largeur.",
     "Les textes longs (objectifs, étiquettes) passent à la ligne dans la case au lieu d'être coupés.",
     "Groupes (ex. Tôlerie, Montage) : un clic au-dessus du tableau n'affiche que leurs colonnes.",
@@ -446,7 +447,7 @@ const NEWS = {
     "Objectif « atteint », Diffuser (tout est prêt ?, relances, exports CSV), sauvegarde et restauration, exemple."],
   "1.0": ["Tableau partagé par dossier Teams : présence, Top 3 avec jours, priorité du jour, relances."],
 };
-const NEWS_SHORT = "pleine largeur, colonnes égales, groupes (Tôlerie, Montage…) et listes de diffusion";
+const NEWS_SHORT = "correction : « + Action » ne crée plus l'action en double";
 const STATUSES = ["Présent", "Télétravail", "Déplacement", "Formation", "Congé", "Absent", "Repos", "Férié"];
 const WORKING = new Set(["Présent", "Télétravail", "Déplacement"]);
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
@@ -1006,7 +1007,9 @@ function addLine(mid, i) {
   const wrap = h("div", null);
   const btn = on(h("button", { class: "addline", type: "button" }, "+ Action"), "click", () => {
     const inp = h("input", { class: "inp addinp", maxlength: "300", placeholder: "Action, puis Entrée", "aria-label": "Nouvelle action" });
-    const done = (keep) => { const t = inp.value.trim(); if (keep && t) { saveAction(uid(), { text: t, owner: mid, week: weekKey, day: i }); } wrap.replaceChildren(btn); update(); };
+    // un champ n'enregistre qu'une fois : retirer le champ après Entrée déclenche aussi « blur »
+    let closed = false;
+    const done = (keep) => { if (closed) return; closed = true; const t = inp.value.trim(); inp.value = ""; if (keep && t) { saveAction(uid(), { text: t, owner: mid, week: weekKey, day: i }); } wrap.replaceChildren(btn); update(); };
     on(inp, "keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); done(true); setTimeout(() => btn.click(), 0); } else if (e.key === "Escape") done(false); });
     on(inp, "blur", () => done(true));
     wrap.replaceChildren(inp); inp.focus();
