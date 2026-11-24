@@ -19,14 +19,15 @@ Données    : un document par case ; la dernière saisie remplace la précédent
              s1-6 présence, p1-6 priorité du jour ; lu semaine par semaine (where w == lundi).
              Format d'événement identique aux versions 1.x : une sauvegarde 1.x se restaure dans le site.
 Règles     : une case est en rouge si elle est vide après l'heure limite (9h30 par défaut) un jour travaillé
-             (Présent, Télétravail, Déplacement). Un objectif du Top 3 écrit et prévu ce jour-là compte comme priorité
-             du jour. Jours fériés : Code du travail, art. L3133-1 ; Pâques calculé (algorithme de Meeus).
+             (Présent, Télétravail, Déplacement). Un objectif du Top 3 écrit et prévu ce jour-là, ou une action prévue ce
+             jour-là, compte comme priorité du jour. Jours fériés : Code du travail, art. L3133-1 ; Pâques calculé (algorithme de Meeus).
              Action en retard : jour prévu passé (ou samedi passé si sans jour), non faite.
 Sorties    : sauvegardes JSON et exports CSV dans Téléchargements.
 Tests      : ⚙ > Réglages avancés > Auto-contrôle (8 tests de l'appli). Tests du socle du gabarit v1.5 : gabarit non fourni.
 Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (13/11/2026) site web Firebase + GitHub Pages,
              sans compte, temps réel, téléphone · 2.1 (16/11/2026) pleine largeur, colonnes égales, retour à la ligne,
-             groupes (filtre) et listes de diffusion · 2.2 (20/11/2026) correction du doublon à la création d'une action.
+             groupes (filtre) et listes de diffusion · 2.2 (20/11/2026) correction du doublon à la création d'une action
+             · 2.3 (24/11/2026) une action prévue un jour compte comme priorité du jour.
 -->
 <style>
 /* Rendu du service (chapitre R du standard) : barre du haut, cadre à coins coupés, titres à carré jaune. */
@@ -383,7 +384,7 @@ details.adv[open] summary{margin-bottom:14px}
   <div class="in">
     <div>
       <div class="appname">Suivi Top 3 équipe</div>
-      <div class="appver" id="appver">Version 2.2 · PE Batilly - PE Logistique</div>
+      <div class="appver" id="appver">Version 2.3 · PE Batilly - PE Logistique</div>
     </div>
     <span class="grow"></span>
     <button class="state" id="state" type="button"><span class="dot"></span><span class="txt">Connexion…</span></button>
@@ -425,8 +426,9 @@ details.adv[open] summary{margin-bottom:14px}
 
 <script>
 "use strict";
-const APP = { name: "Suivi Top 3 équipe", ver: "2.2", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
+const APP = { name: "Suivi Top 3 équipe", ver: "2.3", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
 const NEWS = {
+  "2.3": ["Une action prévue un jour compte comme priorité de ce jour, comme un Top : la case n'est plus rouge."],
   "2.2": ["Correction : « + Action » sur un jour créait l'action en double après Entrée."],
   "2.1": ["La page occupe toute la largeur de l'écran ; les colonnes ont toutes la même largeur.",
     "Les textes longs (objectifs, étiquettes) passent à la ligne dans la case au lieu d'être coupés.",
@@ -447,7 +449,7 @@ const NEWS = {
     "Objectif « atteint », Diffuser (tout est prêt ?, relances, exports CSV), sauvegarde et restauration, exemple."],
   "1.0": ["Tableau partagé par dossier Teams : présence, Top 3 avec jours, priorité du jour, relances."],
 };
-const NEWS_SHORT = "correction : « + Action » ne crée plus l'action en double";
+const NEWS_SHORT = "une action prévue un jour compte comme priorité de ce jour";
 const STATUSES = ["Présent", "Télétravail", "Déplacement", "Formation", "Congé", "Absent", "Repos", "Férié"];
 const WORKING = new Set(["Présent", "Télétravail", "Déplacement"]);
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
@@ -711,10 +713,12 @@ const daysOf = (mid, k) => val(mid, "j" + k).split(",").map(Number).filter((n) =
 function dueAt(i) { const [hh, mm] = cfg("deadline", "09:30").split(":").map(Number); const d = addDays(monday, i - 1); d.setHours(hh || 9, mm || 0, 0, 0); return d; }
 const isDue = (i) => new Date() >= dueAt(i);
 const needs = (mid, i) => i <= 5 && working(mid, i);
-// priorité du jour : la case écrite, ou un objectif du Top 3 écrit et prévu ce jour-là
-const prioOk = (p, nTops) => !!String(p || "").trim() || nTops > 0;
+// priorité du jour : la case écrite, un objectif du Top 3 écrit et prévu ce jour-là, ou une action prévue ce jour-là
+const prioOk = (p, nPlanned) => !!String(p || "").trim() || nPlanned > 0;
 const plannedTops = (mid, i) => [1, 2, 3].filter((k) => daysOf(mid, k).includes(i) && val(mid, "t" + k).trim());
-const hasPriority = (mid, i) => prioOk(val(mid, "p" + i), plannedTops(mid, i).length);
+function plannedActs(mid, i) { let n = 0; for (const a of ACTIONS.values()) if (a && a.owner === mid && a.week === weekKey && a.day === i && String(a.text || "").trim()) n++; return n; }
+const plannedCount = (mid, i) => plannedTops(mid, i).length + plannedActs(mid, i);
+const hasPriority = (mid, i) => prioOk(val(mid, "p" + i), plannedCount(mid, i));
 function missingDays(mid) { const out = []; for (let i = 1; i <= 5; i++) if (isDue(i) && needs(mid, i) && !hasPriority(mid, i)) out.push(i); return out; }
 function missingTop(mid) { let req = false; for (let i = 1; i <= 5; i++) if (needs(mid, i)) req = true; return isDue(1) && req && [1, 2, 3].some((k) => !val(mid, "t" + k).trim()); }
 const missCount = (mid) => missingDays(mid).length + (missingTop(mid) ? 1 : 0);
@@ -1068,7 +1072,7 @@ function update() {
     for (const [f, el] of Object.entries(r.fields)) {
       const v = f[0] === "s" ? status(mid, +f.slice(1)) : val(mid, f);
       if (el !== ae && el.value !== v) { el.value = v; if (el.tagName === "TEXTAREA") autosize(el); }
-      if (f[0] === "p") { const ph = plannedTops(mid, +f.slice(1)).length ? "Autre priorité (facultatif)" : "Priorité du jour"; if (el.placeholder !== ph) el.placeholder = ph; }
+      if (f[0] === "p") { const ph = plannedCount(mid, +f.slice(1)) ? "Autre priorité (facultatif)" : "Priorité du jour"; if (el.placeholder !== ph) el.placeholder = ph; }
       if (f[0] === "s") { el.dataset.st = el.value; el.classList.toggle("off", !WORKING.has(el.value)); }
     }
     const mt = missingTop(mid), md = missingDays(mid);
@@ -1097,7 +1101,7 @@ function update() {
         pl.hidden = !(w && !showCase);
         const need = md.includes(i);
         if (pl.classList.contains("need") !== need) { pl.classList.toggle("need", need); pl.textContent = need ? "+ À remplir" : "+"; }
-        const tip = need ? "Priorité du jour à remplir" : plannedTops(mid, i).length ? "Ajouter une autre priorité du jour" : "Écrire la priorité du jour";
+        const tip = need ? "Priorité du jour à remplir" : plannedCount(mid, i) ? "Ajouter une autre priorité du jour" : "Écrire la priorité du jour";
         if (pl.title !== tip) { pl.title = tip; pl.setAttribute("aria-label", `${(member(mid) || {}).name || ""} – ${tip.toLowerCase()} (${DAYS[i - 1].toLowerCase()})`); }
       }
       if (r.rep && r.rep[i]) r.rep[i].hidden = !w || !val(mid, "p" + i).trim();
@@ -1604,7 +1608,7 @@ const TESTS = [
   ["Pâques 2027 = 28/03/2027, lundi 29/03 férié", () => ymd(easter(2027)) === "2027-03-28" && holidayName(new Date(2027, 2, 29)) === "Lundi de Pâques"],
   ["Ascension 2026 = jeudi 14/05/2026", () => holidayName(new Date(2026, 4, 14)) === "Ascension"],
   ["Pour une même case, la saisie la plus récente gagne", () => computeState([{ id: "b", ts: 2, t: "f", w: "2026-11-09", m: "x", f: "p1", v: "récent" }, { id: "a", ts: 1, t: "f", w: "2026-11-09", m: "x", f: "p1", v: "ancien" }]).data.get("2026-11-09|x").p1 === "récent"],
-  ["Un Top prévu ce jour compte comme priorité du jour ; une case vide sans Top ne compte pas", () => prioOk("", 1) && prioOk("Réunion", 0) && !prioOk("   ", 0)],
+  ["Un Top ou une action prévus ce jour comptent comme priorité du jour ; une case vide sans rien de prévu ne compte pas", () => prioOk("", 1) && prioOk("Réunion", 0) && !prioOk("   ", 0)],
   ["CSV : formule neutralisée, guillemets doublés", () => csvCell("=1+1") === "\"'=1+1\"" && csvCell('a"b') === '"a""b"'],
   ["Action prévue lundi 06/01/2020, non faite = en retard ; sans date = plus tard ; faite = faite", () => actionState({ week: "2020-01-06", day: 1, done: false }) === "late" && actionState({ week: "", day: 0, done: false }) === "later" && actionState({ week: "2020-01-06", day: 1, done: true }) === "done"],
 ];
@@ -1658,7 +1662,7 @@ function helpWin(anchor) {
       sec("debut", "Premiers pas", h("ol", null, li("Le responsable crée l'équipe une fois (⚙ > Équipe en ligne > Créer l'équipe) et envoie le lien aux collègues."), li("Chacun ouvre le lien et écrit son nom. Aucun compte à créer."), li("⚙ > Gérer l'équipe : ajoute les personnes avec leur e-mail (une seule fois pour toute l'équipe)."), li("Pour découvrir sans risque : ⚙ > Réglages avancés > Charger un exemple."))),
       sec("jour", "Au quotidien", h("ul", null,
         li(h("b", null, "Onglets"), " : « Équipe » montre tout le monde ; « Ma semaine » et l'onglet de chaque personne montrent son plan, jour par jour. Le chiffre rouge = cases à remplir."),
-        li(h("b", null, "Priorité du jour"), " : clic sur le petit « + » pour ouvrir la case ; Entrée pour valider. Quittée vide, elle se referme. Un jour travaillé, après 9h30, le « + » devient « + À remplir » en rouge."),
+        li(h("b", null, "Priorité du jour"), " : clic sur le petit « + » pour ouvrir la case ; Entrée pour valider. Quittée vide, elle se referme. Une action prévue ce jour-là compte aussi comme priorité. Un jour travaillé, après 9h30, sans rien de prévu, le « + » devient « + À remplir » en rouge."),
         li(h("b", null, "Jours prévus"), " : sous chaque objectif, coche L M M J V S ; l'objectif apparaît en étiquette dans la case du jour et compte comme priorité de ce jour : la case se replie en un petit « + », à cliquer pour ajouter une autre priorité. Clic sur l'étiquette : modifier l'objectif."),
         li(h("b", null, "Objectif atteint"), " : clic sur le numéro (il passe en vert ✓)."),
         li(h("b", null, "Présence"), " : Congé, Absent, Formation, Repos ou Férié : la case du jour disparaît et rien n'est compté manquant."),
