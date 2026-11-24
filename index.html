@@ -16,7 +16,7 @@ Données    : un document par case ; la dernière saisie remplace la précédent
              teams/{équipe} {name, created, by} · members/{id} t:"m" {name,email,order} | null
              actions/{id} t:"a" {text,owner,week,day,done,first,created} | null · config/{clé} t:"c" (deadline, samedi ; grp_* = groupe {name, members, extra})
              cells/{lundi}_{membre}_{champ} t:"f" : f = t1-3 objectif, j1-3 jours prévus, d1-3 atteint,
-             s1-6 présence, p1-6 priorité du jour ; lu semaine par semaine (where w == lundi).
+             s1-6 présence, p1-6 priorité du jour, c commentaire de la semaine ; lu semaine par semaine (where w == lundi).
              Format d'événement identique aux versions 1.x : une sauvegarde 1.x se restaure dans le site.
 Règles     : une case est en rouge si elle est vide après l'heure limite (9h30 par défaut) un jour travaillé
              (Présent, Télétravail, Déplacement). Un objectif du Top 3 écrit et prévu ce jour-là, ou une action prévue ce
@@ -27,7 +27,8 @@ Tests      : ⚙ > Réglages avancés > Auto-contrôle (8 tests de l'appli). Tes
 Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (13/11/2026) site web Firebase + GitHub Pages,
              sans compte, temps réel, téléphone · 2.1 (16/11/2026) pleine largeur, colonnes égales, retour à la ligne,
              groupes (filtre) et listes de diffusion · 2.2 (20/11/2026) correction du doublon à la création d'une action
-             · 2.3 (24/11/2026) une action prévue un jour compte comme priorité du jour.
+             · 2.3 (24/11/2026) une action prévue un jour compte comme priorité du jour
+             · 2.4 (24/11/2026) commentaire de la semaine au-dessus du Top 3.
 -->
 <style>
 /* Rendu du service (chapitre R du standard) : barre du haut, cadre à coins coupés, titres à carré jaune. */
@@ -289,6 +290,15 @@ body.dragging [data-drop]{outline:1px dashed var(--field);outline-offset:-4px}
 .offtxt{font-size:9.5pt;color:var(--gray);font-style:italic}
 .addline{align-self:stretch;font-size:9.5pt;color:var(--gray);background:none;border:1px dashed var(--line);border-radius:3px;padding:5px 8px;cursor:pointer;text-align:left}
 .addline:hover{border-color:var(--ink);color:var(--ink)}
+/* commentaire de la semaine : replié en « + Commentaire » tant qu'il est vide */
+.notebox{display:flex;flex-direction:column;gap:6px;min-width:0}
+.notebox .lb{font-size:9.5pt;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em}
+.note{display:block;width:100%;min-height:40px;resize:none;overflow:hidden;border:1px solid var(--line);border-left:3px solid var(--yellow);border-radius:3px;padding:8px 10px;background:var(--tint-y);color:var(--text);line-height:1.35;field-sizing:content}
+.note:focus{background:var(--card)}
+.note::placeholder{color:var(--gray);opacity:.75}
+.nplus{align-self:flex-start;font-size:9.5pt;color:var(--gray);background:none;border:1px dashed var(--line);border-radius:3px;padding:4px 10px;cursor:pointer}
+.nplus:hover{border-color:var(--ink);color:var(--ink)}
+.pv-note{margin-bottom:18px}
 .addinp{height:32px;font-size:9.5pt}
 .linkbtn{background:none;border:0;padding:0;font-size:9pt;color:var(--gray);text-decoration:underline;cursor:pointer}
 .linkbtn:hover{color:var(--ink)}
@@ -384,7 +394,7 @@ details.adv[open] summary{margin-bottom:14px}
   <div class="in">
     <div>
       <div class="appname">Suivi Top 3 équipe</div>
-      <div class="appver" id="appver">Version 2.3 · PE Batilly - PE Logistique</div>
+      <div class="appver" id="appver">Version 2.4 · PE Batilly - PE Logistique</div>
     </div>
     <span class="grow"></span>
     <button class="state" id="state" type="button"><span class="dot"></span><span class="txt">Connexion…</span></button>
@@ -426,8 +436,9 @@ details.adv[open] summary{margin-bottom:14px}
 
 <script>
 "use strict";
-const APP = { name: "Suivi Top 3 équipe", ver: "2.3", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
+const APP = { name: "Suivi Top 3 équipe", ver: "2.4", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
 const NEWS = {
+  "2.4": ["Commentaire de la semaine : une case au-dessus du Top 3 de chaque personne, repliée en « + Commentaire » tant qu'elle est vide."],
   "2.3": ["Une action prévue un jour compte comme priorité de ce jour, comme un Top : la case n'est plus rouge."],
   "2.2": ["Correction : « + Action » sur un jour créait l'action en double après Entrée."],
   "2.1": ["La page occupe toute la largeur de l'écran ; les colonnes ont toutes la même largeur.",
@@ -449,7 +460,7 @@ const NEWS = {
     "Objectif « atteint », Diffuser (tout est prêt ?, relances, exports CSV), sauvegarde et restauration, exemple."],
   "1.0": ["Tableau partagé par dossier Teams : présence, Top 3 avec jours, priorité du jour, relances."],
 };
-const NEWS_SHORT = "une action prévue un jour compte comme priorité de ce jour";
+const NEWS_SHORT = "une case Commentaire au-dessus du Top 3 de chaque personne";
 const STATUSES = ["Présent", "Télétravail", "Déplacement", "Formation", "Congé", "Absent", "Repos", "Férié"];
 const WORKING = new Set(["Présent", "Télétravail", "Déplacement"]);
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
@@ -534,7 +545,7 @@ const CLOUD = { state: "init", err: "", api: null, db: null, team: LS.get("team"
 const evKey = (e) => (e.t === "f" ? `f|${e.w}|${e.m}|${e.f}` : e.t === "c" ? `c|${e.f}` : `${e.t}|${e.m}`);
 function validEv(e) {
   if (!e || typeof e.id !== "string" || typeof e.ts !== "number") return false;
-  if (e.t === "f") return typeof e.m === "string" && /^[A-Za-z0-9]{1,40}$/.test(e.m) && /^\d{4}-\d{2}-\d{2}$/.test(e.w) && /^[tjspd][1-6]$/.test(e.f) && typeof e.v === "string";
+  if (e.t === "f") return typeof e.m === "string" && /^[A-Za-z0-9]{1,40}$/.test(e.m) && /^\d{4}-\d{2}-\d{2}$/.test(e.w) && /^(?:[tjspd][1-6]|c)$/.test(e.f) && typeof e.v === "string";
   if (e.t === "m" || e.t === "a") return typeof e.m === "string" && /^[A-Za-z0-9]{1,40}$/.test(e.m);
   if (e.t === "c") return (CFG_KEYS.includes(e.f) && typeof e.v === "string") || (isGrp(e.f) && (e.v === null || (typeof e.v === "object" && !Array.isArray(e.v))));
   return false;
@@ -919,6 +930,17 @@ function dayPicker(m, k) {
 function newRefs(id) { REFS[id] = { fields: {}, picks: {}, nums: {}, cells: {}, items: {}, cases: {}, tops: {}, chk: {}, plus: {}, irow: {} }; return REFS[id]; }
 // cases ouvertes par le « + » (fermées si on les quitte vides)
 const OPENP = new Set();
+// commentaire de la semaine (champ « c » de la personne, propre à chaque semaine)
+const OPENN = new Set();
+function noteBox(m, label) {
+  const r = REFS[m.id];
+  const ta = h("textarea", { class: "note", rows: "2", maxlength: "500", id: `c__${m.id}`, "data-mid": m.id, "data-f": "c", placeholder: "Commentaire de la semaine", "aria-label": `${m.name} – commentaire de la semaine` });
+  const plus = h("button", { class: "nplus", type: "button", title: "Écrire un commentaire pour cette semaine" }, "+ Commentaire");
+  on(plus, "click", () => { OPENN.add(`${weekKey}|${m.id}`); update(); ta.focus(); });
+  const lb = label ? h("span", { class: "lb" }, "Commentaire de la semaine") : null;
+  r.fields.c = ta; r.note = { ta, plus, lb };
+  return h("div", { class: "notebox" }, lb, plus, ta);
+}
 function itemsRow(m, i, items) {
   const r = REFS[m.id];
   const plus = h("button", { class: "pplus", type: "button", hidden: true, title: "Ajouter une autre priorité du jour", "aria-label": `${m.name} – ajouter une priorité du ${DAYS[i - 1].toLowerCase()}` }, "+");
@@ -943,6 +965,9 @@ function teamView() {
     hr.append(h("th", { class: "ph" + (m.id === me ? " me" : ""), scope: "col" }, h("div", { class: "top" }, nm, x), st));
   }
   const tb = h("tbody");
+  const trNote = h("tr", { class: "noterow" }, h("th", { class: "rh", scope: "row" }, h("span", { class: "d" }, "Commentaire"), h("span", { class: "dt" }, "de la semaine")));
+  for (const m of list) trNote.append(h("td", { class: "c" }, h("div", { class: "cell" }, noteBox(m, false))));
+  tb.append(trNote);
   const trTop = h("tr", null, h("th", { class: "rh", scope: "row" }, h("span", { class: "d" }, "Top 3"), h("span", { class: "dt" }, "objectifs et jours prévus")));
   for (const m of list) {
     const r = REFS[m.id];
@@ -1001,6 +1026,7 @@ function personView(m) {
   const pend = h("div", { class: "alist", id: "pv-pending", "data-drop": "later" });
   r.pend = pend;
   return [head,
+    h("div", { class: "pv-note" }, noteBox(m, true)),
     h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "Top 3 de la semaine"), h("span", { class: "fil" }), h("span", { class: "meta" }, "coche les jours prévus")), tops),
     h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, `Plan de la semaine ${isoWeek(monday)}`), h("span", { class: "fil" })), legend(), week),
     h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "En attente"), h("span", { class: "fil" }), h("span", { class: "meta", id: "pv-pend-meta" }, "")),
@@ -1074,6 +1100,10 @@ function update() {
       if (el !== ae && el.value !== v) { el.value = v; if (el.tagName === "TEXTAREA") autosize(el); }
       if (f[0] === "p") { const ph = plannedCount(mid, +f.slice(1)) ? "Autre priorité (facultatif)" : "Priorité du jour"; if (el.placeholder !== ph) el.placeholder = ph; }
       if (f[0] === "s") { el.dataset.st = el.value; el.classList.toggle("off", !WORKING.has(el.value)); }
+    }
+    if (r.note) {
+      const show = !!val(mid, "c").trim() || OPENN.has(`${weekKey}|${mid}`) || r.note.ta === ae;
+      r.note.ta.hidden = !show; r.note.plus.hidden = show; if (r.note.lb) r.note.lb.hidden = !show;
     }
     const mt = missingTop(mid), md = missingDays(mid);
     for (let k = 1; k <= 3; k++) {
@@ -1181,6 +1211,7 @@ on(viewEl, "focusout", (e) => {
   const t = e.target; if (!(t.dataset && t.dataset.mid && t.dataset.f)) return;
   const k = pkey(t.dataset.mid, t.dataset.f); if (PEND.has(k)) commit(k);
   if (t.classList.contains("case")) { if (!t.value.trim()) OPENP.delete(`${weekKey}|${t.dataset.mid}|${t.dataset.f.slice(1)}`); setTimeout(update, 0); }
+  if (t.classList.contains("note")) { if (!t.value.trim()) OPENN.delete(`${weekKey}|${t.dataset.mid}`); setTimeout(update, 0); }
 });
 
 /* glisser-déposer des actions */
@@ -1540,6 +1571,7 @@ async function exportWeek() {
   const rows = [["Semaine", "Personne", "Ligne", "Date", "Présence", "Texte", "Jours prévus", "État"]];
   const sem = "S" + pad(isoWeek(monday)) + " " + monday.getFullYear();
   for (const m of TEAM) {
+    if (val(m.id, "c").trim()) rows.push([sem, m.name, "Commentaire", "", "", val(m.id, "c"), "", ""]);
     for (let k = 1; k <= 3; k++) rows.push([sem, m.name, "Objectif " + k, "", "", val(m.id, "t" + k), daysOf(m.id, k).map((d) => DSHORT[d - 1]).join(", "), val(m.id, "d" + k) === "1" ? "Atteint" : ""]);
     for (let i = 1; i <= nDays(); i++) rows.push([sem, m.name, DAYS[i - 1], fmtDate(addDays(monday, i - 1)), status(m.id, i), val(m.id, "p" + i), "", missingDays(m.id).includes(i) ? "Manquant" : ""]);
   }
@@ -1663,6 +1695,7 @@ function helpWin(anchor) {
       sec("jour", "Au quotidien", h("ul", null,
         li(h("b", null, "Onglets"), " : « Équipe » montre tout le monde ; « Ma semaine » et l'onglet de chaque personne montrent son plan, jour par jour. Le chiffre rouge = cases à remplir."),
         li(h("b", null, "Priorité du jour"), " : clic sur le petit « + » pour ouvrir la case ; Entrée pour valider. Quittée vide, elle se referme. Une action prévue ce jour-là compte aussi comme priorité. Un jour travaillé, après 9h30, sans rien de prévu, le « + » devient « + À remplir » en rouge."),
+        li(h("b", null, "Commentaire"), " : au-dessus du Top 3, clic sur « + Commentaire » pour écrire une note sur la semaine (Entrée passe à la ligne). Il reste attaché à la semaine et se voit par toute l'équipe. Effacé, il se replie."),
         li(h("b", null, "Jours prévus"), " : sous chaque objectif, coche L M M J V S ; l'objectif apparaît en étiquette dans la case du jour et compte comme priorité de ce jour : la case se replie en un petit « + », à cliquer pour ajouter une autre priorité. Clic sur l'étiquette : modifier l'objectif."),
         li(h("b", null, "Objectif atteint"), " : clic sur le numéro (il passe en vert ✓)."),
         li(h("b", null, "Présence"), " : Congé, Absent, Formation, Repos ou Férié : la case du jour disparaît et rien n'est compté manquant."),
@@ -1704,6 +1737,7 @@ function loadExample() {
   put({ t: "c", f: "grp_exMont", v: { name: "Montage", members: ["exc", "exd"], extra: "" } });
   put({ t: "c", f: "grp_exChef", v: { name: "Chefs d'atelier", members: ["exa"], extra: "chef.tolerie@exemple.fr; chef.montage@exemple.fr" } });
   const f = (m, fld, v) => put({ t: "f", w, m, f: fld, v });
+  f("exa", "c", "Point AMR avancé à mercredi : prévoir le plan de charge avant.");
   f("exa", "t1", "Valider le plan de charge des AMR"); f("exa", "j1", "1,3"); f("exa", "t2", "Former 2 caristes à la ligne d'échange"); f("exa", "j2", "4"); f("exa", "t3", "Clore les écarts de l'audit 5S"); f("exa", "j3", "5"); f("exa", "d1", "1");
   f("exb", "t1", "Réception des conteneurs semaine 47"); f("exb", "j1", "2"); f("exb", "t2", "Mettre à jour les étiquettes Data Matrix"); f("exb", "j2", "3,4");
   f("exc", "t1", "Préparer la revue projet de vendredi"); f("exc", "j1", "5"); f("exc", "t2", "Relancer le fournisseur de bacs"); f("exc", "t3", "Plan de formation T1");
