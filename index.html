@@ -14,7 +14,7 @@ Accès      : une équipe = un identifiant secret de 24 caractères dans le lien
              personne ne peut lire ni écrire (règles Firestore : pas de liste des équipes).
 Données    : un document par case ; la dernière saisie remplace la précédente.
              teams/{équipe} {name, created, by} · members/{id} t:"m" {name,email,order} | null
-             actions/{id} t:"a" {text,owner,week,day,done,first,created} | null · config/{clé} t:"c" (deadline, samedi ; grp_* = groupe {name, members, extra})
+             actions/{id} t:"a" {text,owner,week,day,done,doneAt,first,created,moves} | null · config/{clé} t:"c" (deadline, samedi ; grp_* = groupe {name, members, extra})
              cells/{lundi}_{membre}_{champ} t:"f" : f = t1-3 objectif, j1-3 jours prévus, d1-3 atteint,
              s1-6 présence, p1-6 priorité du jour, c commentaire de la semaine ; lu semaine par semaine (where w == lundi).
              Format d'événement identique aux versions 1.x : une sauvegarde 1.x se restaure dans le site.
@@ -28,7 +28,8 @@ Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (
              sans compte, temps réel, téléphone · 2.1 (16/11/2026) pleine largeur, colonnes égales, retour à la ligne,
              groupes (filtre) et listes de diffusion · 2.2 (20/11/2026) correction du doublon à la création d'une action
              · 2.3 (24/11/2026) une action prévue un jour compte comme priorité du jour
-             · 2.4 (24/11/2026) commentaire de la semaine au-dessus du Top 3.
+             · 2.4 (24/11/2026) commentaire de la semaine au-dessus du Top 3
+             · 2.5 (26/11/2026) onglet Pilotage des délais (retards, décalages, relances, bilan).
 -->
 <style>
 /* Rendu du service (chapitre R du standard) : barre du haut, cadre à coins coupés, titres à carré jaune. */
@@ -319,6 +320,32 @@ body.dragging [data-drop]{outline:1px dashed var(--field);outline-offset:-4px}
 .agroup[data-drop]{padding:4px;margin-left:-4px;margin-right:-4px}
 .empty-note{font-size:10pt;color:var(--gray);padding:6px 0}
 
+/* pilotage des délais */
+.plist{display:flex;flex-direction:column}
+.pitem{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;padding:9px 2px;border-bottom:1px solid var(--line)}
+.pitem:last-child{border-bottom:0}
+.pitem .pt{min-width:0;flex:1;display:flex;flex-direction:column;gap:4px}
+.pitem .t,.pitem .t0{background:none;border:0;padding:0;text-align:left;color:var(--text);font-weight:600;overflow-wrap:anywhere;display:flex;gap:8px;align-items:flex-start}
+.pitem .t{cursor:pointer}
+.pitem .t:hover{text-decoration:underline}
+.pitem .t0 .num{margin:0;flex:none}
+.pitem .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:9pt;color:var(--gray)}
+.pitem .pb{display:flex;gap:6px;flex:none}
+.pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:12px}
+.pcard{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--orange);padding:10px 12px;min-width:0}
+.pcard.bad{border-top-color:var(--red)}
+.pc-h{display:flex;align-items:center;gap:10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.pc-h .av{flex:none}
+.pc-h .who{display:flex;flex-direction:column;min-width:0;flex:1}
+.pc-h .nm{background:none;border:0;padding:0;text-align:left;font-weight:700;color:var(--ink);cursor:pointer;font-size:11pt}
+.pc-h .nm:hover{text-decoration:underline}
+.pc-h .sub{font-size:9pt;color:var(--gray)}
+.pc-b{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+a.btn[aria-disabled="true"]{opacity:.4;pointer-events:none}
+.ptbl tfoot td{font-weight:700;border-top:2px solid var(--ink)}
+.pfoot{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:10px}
+@media (max-width:620px){.pcards{grid-template-columns:1fr}.pitem{flex-direction:column}.pitem .pb{align-self:flex-end}.pc-h{flex-wrap:wrap}}
+
 /* tiroir */
 #drawer{position:fixed;top:0;right:0;bottom:0;width:min(430px,100vw);background:var(--card);border-left:1.5px solid var(--ink);z-index:45;display:flex;flex-direction:column;box-shadow:-10px 0 30px rgba(0,0,0,.15)}
 #drawer::before{content:"";position:absolute;top:0;left:16px;width:120px;height:5px;background:var(--yellow)}
@@ -394,7 +421,7 @@ details.adv[open] summary{margin-bottom:14px}
   <div class="in">
     <div>
       <div class="appname">Suivi Top 3 équipe</div>
-      <div class="appver" id="appver">Version 2.4 · PE Batilly - PE Logistique</div>
+      <div class="appver" id="appver">Version 2.5 · PE Batilly - PE Logistique</div>
     </div>
     <span class="grow"></span>
     <button class="state" id="state" type="button"><span class="dot"></span><span class="txt">Connexion…</span></button>
@@ -436,8 +463,9 @@ details.adv[open] summary{margin-bottom:14px}
 
 <script>
 "use strict";
-const APP = { name: "Suivi Top 3 équipe", ver: "2.4", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
+const APP = { name: "Suivi Top 3 équipe", ver: "2.5", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
 const NEWS = {
+  "2.5": ["Onglet « Pilotage » : actions en retard, décalées et à arbitrer, objectifs du Top 3 menacés, relance prête par personne (Teams, mail ou copier) et bilan de la tenue des délais de la semaine."],
   "2.4": ["Commentaire de la semaine : une case au-dessus du Top 3 de chaque personne, repliée en « + Commentaire » tant qu'elle est vide."],
   "2.3": ["Une action prévue un jour compte comme priorité de ce jour, comme un Top : la case n'est plus rouge."],
   "2.2": ["Correction : « + Action » sur un jour créait l'action en double après Entrée."],
@@ -460,7 +488,7 @@ const NEWS = {
     "Objectif « atteint », Diffuser (tout est prêt ?, relances, exports CSV), sauvegarde et restauration, exemple."],
   "1.0": ["Tableau partagé par dossier Teams : présence, Top 3 avec jours, priorité du jour, relances."],
 };
-const NEWS_SHORT = "une case Commentaire au-dessus du Top 3 de chaque personne";
+const NEWS_SHORT = "onglet Pilotage : retards, décalages, relances prêtes et bilan des délais";
 const STATUSES = ["Présent", "Télétravail", "Déplacement", "Formation", "Congé", "Absent", "Repos", "Férié"];
 const WORKING = new Set(["Présent", "Télétravail", "Déplacement"]);
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
@@ -555,7 +583,7 @@ function cleanAction(v) {
   if (!v || typeof v !== "object" || typeof v.text !== "string" || !v.text.trim()) return null;
   const week = /^\d{4}-\d{2}-\d{2}$/.test(v.week) ? v.week : "";
   const day = week ? Math.max(0, Math.min(6, Math.round(Number(v.day) || 0))) : 0;
-  return { text: v.text.trim().slice(0, 300), owner: typeof v.owner === "string" ? v.owner : "", week, day, done: !!v.done, doneAt: Number(v.doneAt) || 0, first: typeof v.first === "string" ? v.first : "", created: Number(v.created) || 0 };
+  return { text: v.text.trim().slice(0, 300), owner: typeof v.owner === "string" ? v.owner : "", week, day, done: !!v.done, doneAt: Number(v.doneAt) || 0, first: typeof v.first === "string" ? v.first : "", created: Number(v.created) || 0, moves: Math.max(0, Math.min(99, Math.round(Number(v.moves) || 0))) };
 }
 function computeState(iter) {
   const last = new Map();
@@ -773,9 +801,14 @@ function firstLabel(a) {
 }
 function saveAction(id, patch) {
   const cur = ACTIONS.get(id);
-  const base = cur ? { text: cur.text, owner: cur.owner, week: cur.week, day: cur.day, done: cur.done, doneAt: cur.doneAt, first: cur.first, created: cur.created } : { text: "", owner: "", week: "", day: 0, done: false, doneAt: 0, first: "", created: Date.now() };
+  const base = cur ? { text: cur.text, owner: cur.owner, week: cur.week, day: cur.day, done: cur.done, doneAt: cur.doneAt, first: cur.first, created: cur.created, moves: cur.moves || 0 } : { text: "", owner: "", week: "", day: 0, done: false, doneAt: 0, first: "", created: Date.now(), moves: 0 };
   const v = { ...base, ...patch };
   if (!v.week) v.day = 0;
+  // décalage : une action prévue, pas faite, repoussée plus tard ou renvoyée en attente
+  if (!base.done && base.week && ("week" in patch || "day" in patch)) {
+    const was = actDate(base), now = v.week ? actDate(v) : null;
+    if (!now || now > was) v.moves = (base.moves || 0) + 1;
+  }
   if (v.week && !v.first) v.first = `${v.week}|${v.day || 0}`;
   if (patch.done === true && !base.done) v.doneAt = Date.now();
   if (patch.done === false) v.doneAt = 0;
@@ -788,6 +821,89 @@ function dayItems(mid, i) {
   for (let k = 1; k <= 3; k++) if (daysOf(mid, k).includes(i)) tops.push({ k, t: val(mid, "t" + k).trim(), done: val(mid, "d" + k) === "1" });
   const acts = [...ACTIONS.values()].filter((a) => a.owner === mid && a.week === weekKey && a.day === i).sort((a, b) => a.created - b.created);
   return { tops, acts };
+}
+
+/* ——————————— pilotage des délais : règles fixes, calculées dans le navigateur ———————————
+   Retard = date prévue passée, action pas faite. Glissement = jours ouvrés entre la date prévue au départ
+   et aujourd'hui (ou la nouvelle date, ou le jour où l'action a été faite). À arbitrer = pas faite et
+   décalée au moins 2 fois, ou glissement de plus de 5 jours ouvrés. */
+const PILOT = { moves: 2, slip: 5 };
+const isWorkDay = (d) => d.getDay() >= 1 && d.getDay() <= 5 && !holidayName(d);
+function workDaysBetween(a, b) { // jours ouvrés dans ]a, b]
+  let n = 0, d = startOfDay(a); const end = startOfDay(b);
+  for (let k = 0; d < end && k < 1000; k++) { d = addDays(d, 1); if (isWorkDay(d)) n++; }
+  return n;
+}
+function firstDate(a) { const [w, d] = String(a.first || "").split("|"); return /^\d{4}-\d{2}-\d{2}$/.test(w || "") ? addDays(parseYmd(w), (+d || 6) - 1) : null; }
+function movesOf(a) { const f = firstDate(a), c = actDate(a); return Math.max(a.moves || 0, f && (!c || c > f) ? 1 : 0); }
+function slipDays(a, now = new Date()) {
+  const f = firstDate(a); if (!f) return 0;
+  const today = startOfDay(now), c = actDate(a);
+  const ref = a.done ? startOfDay(new Date(a.doneAt || +(c || f))) : c && c > today ? c : today;
+  return ref > f ? workDaysBetween(f, ref) : 0;
+}
+const toArbitrate = (a) => !a.done && (movesOf(a) >= PILOT.moves || slipDays(a) > PILOT.slip);
+const dShort = (d) => DSHORT[(d.getDay() + 6) % 7].toLowerCase() + ". " + fmtDM(d);
+function pilotScope() {
+  const ids = new Set(visibleTeam().map((m) => m.id));
+  return (a) => ids.has(a.owner) || (!FILTER && !member(a.owner));
+}
+function top3Threats(mid) {
+  if (!isCurrentWeek()) return [];
+  const ti = todayIndex(), out = [];
+  for (let k = 1; k <= 3; k++) {
+    const t = val(mid, "t" + k).trim(); if (!t || val(mid, "d" + k) === "1") continue;
+    const ds = daysOf(mid, k);
+    if (ds.length && Math.max(...ds) < ti) out.push({ k, t, why: "prévu jusqu'à " + DAYS[Math.max(...ds) - 1].toLowerCase() + ", pas encore atteint" });
+    else if (!ds.length && ti >= 5) out.push({ k, t, why: "aucun jour prévu, pas encore atteint" });
+  }
+  return out;
+}
+function pilotModel() {
+  const now = new Date(), today = startOfDay(now), inScope = pilotScope();
+  const open = [...ACTIONS.values()].filter((a) => !a.done && inScope(a));
+  const info = (a) => { const c = actDate(a), st = actionState(a, now); return { a, st, late: st === "late" ? workDaysBetween(c, today) : 0, today: !!c && ymd(c) === ymd(today), moves: movesOf(a), slip: slipDays(a, now), arb: toArbitrate(a) }; };
+  const items = open.filter((a) => a.week || a.first).map(info);
+  const arb = items.filter((x) => x.arb).sort((x, y) => y.slip - x.slip || y.moves - x.moves);
+  const people = visibleTeam().map((m) => {
+    const mine = items.filter((x) => x.a.owner === m.id && (x.st === "late" || x.today)).sort((x, y) => y.late - x.late || (x.today ? 1 : 0) - (y.today ? 1 : 0));
+    return { m, late: mine.filter((x) => x.st === "late"), today: mine.filter((x) => x.today), tops: top3Threats(m.id) };
+  });
+  // bilan de la semaine affichée : actions dont la date prévue au départ tombe dans la semaine
+  const wkEnd = addDays(monday, 7);
+  const bil = (owners) => {
+    const eng = [...ACTIONS.values()].filter((a) => owners.includes(a.owner) && (a.first ? a.first.split("|")[0] === weekKey : a.week === weekKey && !!a.day));
+    const due = (a) => { const f = firstDate(a) || actDate(a); return { f, end: addDays(f, 1) }; };
+    const inTime = eng.filter((a) => a.done && a.doneAt && a.doneAt < +due(a).end).length;
+    const lateDone = eng.filter((a) => a.done && !(a.doneAt && a.doneAt < +due(a).end)).length;
+    const counted = eng.filter((a) => a.done || due(a).f < today).length;
+    let tw = 0, td = 0;
+    for (const id of owners) for (let k = 1; k <= 3; k++) if (val(id, "t" + k).trim()) { tw++; if (val(id, "d" + k) === "1") td++; }
+    return { n: eng.length, inTime, lateDone, open: eng.filter((a) => !a.done).length, moved: eng.filter((a) => movesOf(a) > 0).length, counted, rate: counted ? Math.round((100 * inTime) / counted) : null, tw, td };
+  };
+  const bilan = visibleTeam().map((m) => ({ m, ...bil([m.id]) }));
+  const total = bil(visibleTeam().map((m) => m.id));
+  const sig = JSON.stringify([weekKey, ymd(today), USER, isCurrentWeek(), items.map((x) => [x.a.id, x.a.text, x.a.owner, x.st, x.late, x.today, x.moves, x.slip]), people.map((p) => [p.m.id, p.m.name, p.m.email, p.tops.map((t) => t.t + t.why)]), bilan.map((b) => [b.n, b.inTime, b.lateDone, b.open, b.moved, b.tw, b.td]), wkEnd < today]);
+  return { items, arb, people, bilan, total, sig };
+}
+function relanceMsg(p) {
+  const lines = [`Bonjour ${firstName(p.m.name)},`, "Point délais sur tes actions :"];
+  for (const x of p.late) lines.push(`• En retard : ${x.a.text} (prévue ${dShort(actDate(x.a))}, ${x.late} j ouvré${x.late > 1 ? "s" : ""} de retard${x.moves ? ", décalée " + x.moves + " fois" : ""})`);
+  for (const x of p.today) lines.push(`• Prévu aujourd'hui : ${x.a.text}`);
+  for (const t of p.tops) lines.push(`• Top 3 n°${t.k} : ${t.t} (${t.why})`);
+  lines.push(p.late.length || p.tops.length ? "Peux-tu me dire où tu en es et me donner une date réaliste pour ce qui est en retard ? Si quelque chose te bloque, dis-le moi." : "Bon courage pour la journée !");
+  if (CLOUD.team && !EXAMPLE) lines.push("Suivi : " + teamLink());
+  lines.push("Merci" + (firstName(USER) ? ",\n" + firstName(USER) : " !"));
+  return lines.join("\n");
+}
+function bilanText(pm) {
+  const pc = (b) => (b.rate == null ? "–" : b.rate + " %");
+  const L = [`Bilan ${"S" + pad(isoWeek(monday))} (${fmtDM(monday)} – ${fmtDM(addDays(monday, nDays() - 1))}) : tenue des délais`];
+  const t = pm.total;
+  L.push(`Équipe : ${t.inTime}/${t.counted} action(s) échue(s) faite(s) dans le délai (${pc(t)}), ${t.lateDone} faite(s) en retard, ${t.open} pas encore faite(s), ${t.moved} décalée(s). Top 3 atteints : ${t.td}/${t.tw}.`);
+  for (const b of pm.bilan) if (b.n || b.tw) L.push(`• ${b.m.name} : ` + [b.counted ? `${b.inTime}/${b.counted} faite(s) dans le délai (${pc(b)})` : b.n ? "aucune action encore échue" : "aucune action prévue", b.moved ? `${b.moved} décalée(s)` : "", b.open ? `${b.open} restante(s)` : "", b.tw ? `Top 3 ${b.td}/${b.tw}` : ""].filter(Boolean).join(", "));
+  if (pm.arb.length) { L.push("À arbitrer :"); for (const x of pm.arb) L.push(`• ${x.a.text} (${(member(x.a.owner) || {}).name || "sans pilote"}, décalée ${x.moves} fois, glissement ${x.slip} j ouvrés)`); }
+  return L.join("\n");
 }
 
 /* ——————————— rendu : barre, bandeau, onglets ——————————— */
@@ -835,7 +951,7 @@ let TABSIG = "";
 function renderTabs() {
   const me = meId();
   const list = visibleTeam();
-  const sig = [VIEW, me, list.map((m) => m.id + m.name + missCount(m.id)).join(",")].join("#");
+  const sig = [VIEW, me, FILTER, list.map((m) => m.id + m.name + missCount(m.id)).join(","), [...ACTIONS.values()].filter((a) => actionState(a) === "late").map((a) => a.id + a.owner).join(",")].join("#");
   if (sig === TABSIG) return; TABSIG = sig;
   const tabs = $("#tabs"); tabs.replaceChildren();
   const mk = (id, label, extra, title) => {
@@ -844,6 +960,10 @@ function renderTabs() {
     return b;
   };
   tabs.append(mk("team", "Équipe", [], "Tout le monde sur un tableau"));
+  const pl = mk("pilot", "Pilotage", [], "Retards, décalages, relances et bilan de la semaine");
+  const nLate = [...ACTIONS.values()].filter((a) => pilotScope()(a) && actionState(a) === "late").length;
+  if (nLate) pl.append(h("span", { class: "cnt", "aria-label": nLate + " action(s) en retard" }, String(nLate)));
+  tabs.append(pl);
   const ordered = me && list.some((m) => m.id === me) ? [list.find((m) => m.id === me), ...list.filter((m) => m.id !== me)] : list;
   for (const m of ordered) {
     const c = missCount(m.id);
@@ -874,10 +994,11 @@ function renderToolbar() {
 let STRUCT = "", REFS = {};
 function render() {
   renderToolbar(); renderTabs(); renderBanner(); setStateTxt();
-  if (VIEW !== "team" && !member(VIEW)) { VIEW = "team"; }
+  if (VIEW !== "team" && VIEW !== "pilot" && !member(VIEW)) { VIEW = "team"; }
   if (!VIEW_TOUCHED && !EXAMPLE && VIEW === "team" && window.innerWidth < 700 && meId()) VIEW = meId();   // téléphone : ma semaine en cartes
   const view = $("#view");
-  const key = [VIEW, weekKey, todayIndex(), meId(), nDays(), EXAMPLE ? 1 : 0, visibleTeam().map((m) => m.id + ":" + m.name).join("|"), TEAM.length, TEAM.length ? "" : [USER, CLOUD.state, CLOUD.team, LASTSYNC ? 1 : 0].join(",")].join("#");
+  const pm = VIEW === "pilot" && TEAM.length ? pilotModel() : null;
+  const key = [VIEW, pm ? pm.sig : "", weekKey, todayIndex(), meId(), nDays(), EXAMPLE ? 1 : 0, visibleTeam().map((m) => m.id + ":" + m.name).join("|"), TEAM.length, TEAM.length ? "" : [USER, CLOUD.state, CLOUD.team, LASTSYNC ? 1 : 0].join(",")].join("#");
   if (key !== STRUCT) {
     STRUCT = key;
     const ae = document.activeElement, fid = ae && view.contains(ae) ? ae.id : "";
@@ -886,6 +1007,7 @@ function render() {
     REFS = {};
     if (!TEAM.length) view.replaceChildren(...welcomeView());
     else if (VIEW === "team") view.replaceChildren(...teamView());
+    else if (pm) view.replaceChildren(...pilotView(pm));
     else view.replaceChildren(...personView(member(VIEW)));
     const sc = view.querySelector(".board-scroll"); if (sc) sc.scrollLeft = sl;
     if (fid) { const n = document.getElementById(fid); if (n) { n.focus({ preventScroll: true }); if (sel && n.setSelectionRange) try { n.setSelectionRange(sel[0], sel[1]); } catch (e) { /* */ } } }
@@ -1032,6 +1154,66 @@ function personView(m) {
     h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "En attente"), h("span", { class: "fil" }), h("span", { class: "meta", id: "pv-pend-meta" }, "")),
       h("p", { class: "hint", style: "margin-bottom:6px" }, "Glisse une action sur un jour pour la planifier, ou ouvre-la pour choisir une autre semaine."), pend,
       h("div", { style: "margin-top:10px" }, on(h("button", { class: "btn sm", type: "button" }, "+ Nouvelle action"), "click", () => actionWin(null, { owner: m.id }))))];
+}
+function pilotView(pm) {
+  const list = visibleTeam(), wk = "S" + pad(isoWeek(monday));
+  const meta = list.length < TEAM.length ? `${list.length} personne(s) affichée(s) sur ${TEAM.length}` : `${TEAM.length} personne(s)`;
+  const head = h("h2", { class: "sec" }, h("span", null, "Pilotage des délais"), h("span", { class: "fil" }), h("span", { class: "meta" }, meta));
+  const late = pm.items.filter((x) => x.st === "late"), today = pm.items.filter((x) => x.today), tops = pm.people.reduce((n, p) => n + p.tops.length, 0);
+  const tile = (cls, v, l) => h("div", { class: "tile " + cls }, h("div", { class: "v" }, v), h("div", { class: "l" }, l));
+  const tiles = h("div", { class: "tiles" },
+    tile(late.length ? "bad" : "ok", String(late.length), "Actions en retard"),
+    tile(today.length ? "warn" : "", String(today.length), "Actions prévues aujourd'hui"),
+    tile(pm.arb.length ? "warn" : "ok", String(pm.arb.length), "À arbitrer en point"),
+    tile(!isCurrentWeek() ? "" : tops ? "bad" : "ok", isCurrentWeek() ? String(tops) : "–", isCurrentWeek() ? "Objectifs du Top 3 menacés" : "Top 3 menacés (semaine en cours)"));
+  const tags = (x) => [
+    x.st === "late" ? h("span", { class: "et bad" }, `✕ ${x.late} j de retard`) : x.today ? h("span", { class: "et warn" }, "Aujourd'hui") : h("span", { class: "et neu" }, whenLabel(x.a)),
+    x.moves ? h("span", { class: "et neu", title: "Nombre de fois où la date a été repoussée" }, `décalée ${x.moves}×`) : null,
+    x.slip ? h("span", { class: "et neu", title: "Jours ouvrés entre la date prévue au départ et aujourd'hui (ou la nouvelle date)" }, `glissement ${x.slip} j`) : null,
+    x.arb ? h("span", { class: "et warn" }, "À arbitrer") : null];
+  const itemRow = (x, showOwner) => {
+    const m = member(x.a.owner);
+    return h("div", { class: "pitem" },
+      h("div", { class: "pt" }, on(h("button", { class: "t", type: "button", title: "Ouvrir l'action" }, x.a.text), "click", () => actionWin(x.a.id)),
+        h("div", { class: "meta" }, ...tags(x), showOwner ? h("span", null, m ? m.name : "Sans pilote") : null, firstLabel(x.a) ? h("span", null, firstLabel(x.a)) : null)),
+      h("div", { class: "pb" },
+        on(h("button", { class: "btn sm", type: "button", title: "Choisir une nouvelle date" }, "Replanifier"), "click", () => actionWin(x.a.id)),
+        on(h("button", { class: "btn sm", type: "button", title: "Marquer comme faite" }, "✓ Faite"), "click", () => { saveAction(x.a.id, { done: true }); toast("Action faite : " + x.a.text); render(); })));
+  };
+  // 1. à arbitrer
+  const arbBlk = h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "À arbitrer en point"), h("span", { class: "fil" }), h("span", { class: "meta" }, `décalée ${PILOT.moves} fois ou plus, ou glissement de plus de ${PILOT.slip} jours ouvrés`)),
+    pm.arb.length ? h("div", { class: "plist" }, ...pm.arb.map((x) => itemRow(x, true))) : h("p", { class: "empty-note" }, "Rien à arbitrer : aucune action décalée deux fois ni de plus de 5 jours ouvrés."));
+  // 2. relances par personne
+  const who = pm.people.filter((p) => p.late.length || p.today.length || p.tops.length);
+  const card = (p) => {
+    const msg = relanceMsg(p), em = p.m.email ? [p.m.email] : [];
+    const noMail = em.length ? null : "Ajoute son e-mail dans ⚙ > Équipe pour l'envoyer en un clic";
+    const a1 = h("a", { class: "btn sm primary", href: em.length ? teamsUrl(em, msg) : null, target: "_blank", rel: "noopener", title: noMail || "Ouvre Teams avec le message prêt", "aria-disabled": em.length ? null : "true" }, "Teams");
+    const a2 = h("a", { class: "btn sm", href: em.length ? listMailUrl(em, "Point délais " + wk, msg) : null, title: noMail || "Ouvre un e-mail prêt", "aria-disabled": em.length ? null : "true" }, "Mail");
+    const cp = on(h("button", { class: "btn sm", type: "button", title: "Copier le message" }, "Copier"), "click", () => copy(msg));
+    const n = p.late.length;
+    return h("div", { class: "pcard" + (n ? " bad" : "") },
+      h("div", { class: "pc-h" }, h("span", { class: "av" }, initials(p.m.name)), h("div", { class: "who" }, on(h("button", { class: "nm", type: "button", title: "Ouvrir son plan de la semaine" }, p.m.name), "click", () => setView(p.m.id)),
+        h("span", { class: "sub" }, [n ? `${n} en retard` : "", p.today.length ? `${p.today.length} aujourd'hui` : "", p.tops.length ? `${p.tops.length} Top 3 menacé(s)` : ""].filter(Boolean).join(" · "))),
+        h("div", { class: "pc-b" }, a1, a2, cp)),
+      ...p.late.map((x) => itemRow(x, false)), ...p.today.map((x) => itemRow(x, false)),
+      ...p.tops.map((t) => h("div", { class: "pitem" }, h("div", { class: "pt" }, h("span", { class: "t0" }, h("span", { class: "num" }, String(t.k)), t.t), h("div", { class: "meta" }, h("span", { class: "et bad" }, "Top 3 menacé"), h("span", null, t.why))),
+        h("div", { class: "pb" }, on(h("button", { class: "btn sm", type: "button" }, "Voir"), "click", () => setView(p.m.id))))));
+  };
+  const relBlk = h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "Relances"), h("span", { class: "fil" }), h("span", { class: "meta" }, `message prêt, signé ${firstName(USER) || "par toi"} : tu choisis Teams, mail ou copier`)),
+    who.length ? h("div", { class: "pcards" }, ...who.map(card)) : h("p", { class: "empty-note" }, "Aucun retard ni action prévue aujourd'hui : rien à relancer."));
+  // 3. bilan de la semaine affichée
+  const pc = (b) => (b.rate == null ? "–" : b.rate + " %");
+  const rc = (b) => (b.rate == null ? "" : b.rate >= 80 ? "ok" : b.rate >= 50 ? "warn" : "bad");
+  const row = (b, name) => h("tr", null, h("td", null, name), h("td", { class: "r" }, String(b.n)), h("td", { class: "r" }, String(b.inTime)), h("td", { class: "r" }, String(b.lateDone)), h("td", { class: "r" }, String(b.open)), h("td", { class: "r" }, String(b.moved)), h("td", { class: "r" }, `${b.td} / ${b.tw}`), h("td", { class: "r" }, b.rate == null ? "–" : h("span", { class: "et " + rc(b) }, pc(b))));
+  const bilBlk = h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, `Bilan ${wk}`), h("span", { class: "fil" }), h("span", { class: "meta" }, isCurrentWeek() ? "semaine en cours, à jour en temps réel" : "change de semaine avec ‹ ›")),
+    h("div", { class: "tbl-wrap" }, h("table", { class: "tbl ptbl" },
+      h("thead", null, h("tr", null, h("th", null, "Personne"), h("th", { class: "r", title: "Actions dont la date prévue au départ tombe dans la semaine" }, "Engagements"), h("th", { class: "r" }, "Faites dans le délai"), h("th", { class: "r" }, "Faites en retard"), h("th", { class: "r" }, "Pas faites"), h("th", { class: "r" }, "Décalées"), h("th", { class: "r" }, "Top 3 atteints"), h("th", { class: "r", title: "Faites dans le délai ÷ engagements échus" }, "Tenue des délais"))),
+      h("tbody", null, ...pm.bilan.map((b) => row(b, b.m.name))),
+      h("tfoot", null, row(pm.total, "Équipe")))),
+    h("div", { class: "pfoot" }, h("p", { class: "hint" }, "Tenue des délais = actions faites au plus tard à la date prévue au départ ÷ actions dont cette date est passée (ou déjà faites)."),
+      on(h("button", { class: "btn sm", type: "button" }, "Copier le bilan"), "click", () => copy(bilanText(pm)))));
+  return [head, tiles, arbBlk, relBlk, bilBlk];
 }
 function addLine(mid, i) {
   const wrap = h("div", null);
@@ -1685,7 +1867,7 @@ function settingsWin() {
 function helpWin(anchor) {
   const sec = (id, title, ...kids) => h("section", { id: "aide-" + id, class: "help-doc" }, h("h3", null, title), ...kids);
   const li = (...k) => h("li", null, ...k);
-  const toc = [["sert", "À quoi sert l'appli"], ["debut", "Premiers pas"], ["jour", "Au quotidien"], ["attente", "Actions en attente"], ["diffuser", "Diffuser"], ["partage", "Partage"], ["questions", "Questions fréquentes"], ["news", "Quoi de neuf"]];
+  const toc = [["sert", "À quoi sert l'appli"], ["debut", "Premiers pas"], ["jour", "Au quotidien"], ["attente", "Actions en attente"], ["pilotage", "Pilotage des délais"], ["diffuser", "Diffuser"], ["partage", "Partage"], ["questions", "Questions fréquentes"], ["news", "Quoi de neuf"]];
   openWin({
     title: "Aide · mode d'emploi", size: "large",
     body: [
@@ -1702,6 +1884,15 @@ function helpWin(anchor) {
         li(h("b", null, "Code couleur"), " : chaque statut a sa couleur, en liseré à gauche de la case (légende sous les tuiles). « Masquer les présences » enlève les listes et les couleurs sur ton appareil ; les absences restent prises en compte."),
         li(h("b", null, "Masquer"), " : ✕ sur une colonne, ou bouton « Personnes » (Moi seulement, Tout afficher). Ce choix ne concerne que ton appareil."),
         li(h("b", null, "Groupes"), " : les boutons « Tous », « Tôlerie », « Montage »… au-dessus du tableau n'affichent que les colonnes du groupe. On les crée dans ⚙ > Groupes et listes ; ils sont partagés avec l'équipe."))),
+      sec("pilotage", "Pilotage des délais", h("ul", null,
+        li(h("b", null, "Onglet « Pilotage »"), " : visible par toute l'équipe, il suit le groupe choisi et les personnes affichées. Le chiffre rouge = actions en retard."),
+        li(h("b", null, "En retard"), " : la date prévue est passée et l'action n'est pas cochée. Le retard est compté en jours ouvrés (hors week-ends et jours fériés)."),
+        li(h("b", null, "Décalée"), " : chaque fois qu'une action pas faite est repoussée à une date plus tardive ou renvoyée « Plus tard », le compteur augmente. Avancer une date ne compte pas."),
+        li(h("b", null, "Glissement"), " : jours ouvrés entre la date prévue au départ et aujourd'hui (ou la nouvelle date si elle est plus loin)."),
+        li(h("b", null, "À arbitrer en point"), " : action pas faite, décalée 2 fois ou plus, ou avec un glissement de plus de 5 jours ouvrés. À trancher en point : nouvelle date, aide ou abandon."),
+        li(h("b", null, "Relances"), " : pour chaque personne en retard, avec une action prévue aujourd'hui ou un objectif du Top 3 menacé, un message prêt et signé de ton prénom. Teams et Mail ouvrent le message ; rien n'est envoyé sans ton clic."),
+        li(h("b", null, "Top 3 menacé"), " : objectif pas atteint alors que son dernier jour prévu est passé (ou sans jour prévu le vendredi)."),
+        li(h("b", null, "Bilan"), " : pour la semaine affichée, les actions dont la date prévue au départ tombe dans la semaine. Tenue des délais = faites au plus tard à cette date ÷ celles dont la date est passée. « Copier le bilan » prépare un texte pour ton point d'équipe."))),
       sec("attente", "Actions en attente", h("ul", null,
         li("Bouton « En attente » : la liste de toutes les actions non faites, en retard d'abord."),
         li("Glisse une action sur un jour du tableau ou d'un onglet pour la planifier ; dépose-la sur « Plus tard » pour la garder sans date."),
@@ -1751,6 +1942,8 @@ function loadExample() {
   act("xa4", "Point fournisseur Hikrobot", "exa", w, Math.min(Math.max(ti, 1), 5), false);
   act("xa5", "Envoyer le compte rendu de la revue", "exc", nxt, 1, false);
   act("xa6", "Vérifier les badges visiteurs", "exb", w, 1, true);
+  put({ t: "a", m: "xa7", v: { text: "Valider la ligne d'échange cariste / AMR", owner: "exd", week: w, day: 5, done: false, doneAt: 0, first: `${ymd(addDays(cur, -14))}|2`, created: ts, moves: 2 } });
+  put({ t: "a", m: "xa8", v: { text: "Chiffrer les tables AMR inclinées", owner: "exc", week: prev, day: 2, done: false, doneAt: 0, first: `${prev}|1`, created: ts, moves: 1 } });
   ME = ""; VIEW = "team"; replay(); STRUCT = ""; TABSIG = ""; render(); window.scrollTo({ top: 0 });
 }
 function quitExample() {
