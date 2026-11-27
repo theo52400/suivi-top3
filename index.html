@@ -31,7 +31,8 @@ Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (
              · 2.4 (24/11/2026) commentaire de la semaine au-dessus du Top 3
              · 2.5 (26/11/2026) onglet Pilotage des délais (retards, décalages, relances, bilan)
              · 2.6 (27/11/2026) un seul jour prévu par objectif du Top 3
-             · 2.7 (27/11/2026) ligne « Travaux annexes » (petites tâches sans date).
+             · 2.7 (27/11/2026) ligne « Travaux annexes » (petites tâches sans date)
+             · 2.8 (27/11/2026) compte rendu d'activité par pilote pour Outlook.
 -->
 <style>
 /* Rendu du service (chapitre R du standard) : barre du haut, cadre à coins coupés, titres à carré jaune. */
@@ -351,6 +352,13 @@ a.btn[aria-disabled="true"]{opacity:.4;pointer-events:none}
 .pfoot{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:10px}
 @media (max-width:620px){.pcards{grid-template-columns:1fr}.pitem{flex-direction:column}.pitem .pb{align-self:flex-end}.pc-h{flex-wrap:wrap}}
 
+/* compte rendu */
+.crtools{display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:16px;align-items:start}
+.crparts{display:flex;flex-wrap:wrap;gap:6px 16px;padding-top:6px}
+.crprev{border:1px solid var(--line);background:#fff;color:#1C1F24;padding:16px 18px;max-height:46vh;overflow:auto;margin:10px 0}
+.crsteps{margin:0;padding-left:20px;font-size:9.5pt;color:var(--gray)}
+@media (max-width:620px){.crtools{grid-template-columns:1fr}}
+
 /* tiroir */
 #drawer{position:fixed;top:0;right:0;bottom:0;width:min(430px,100vw);background:var(--card);border-left:1.5px solid var(--ink);z-index:45;display:flex;flex-direction:column;box-shadow:-10px 0 30px rgba(0,0,0,.15)}
 #drawer::before{content:"";position:absolute;top:0;left:16px;width:120px;height:5px;background:var(--yellow)}
@@ -426,7 +434,7 @@ details.adv[open] summary{margin-bottom:14px}
   <div class="in">
     <div>
       <div class="appname">Suivi Top 3 équipe</div>
-      <div class="appver" id="appver">Version 2.7 · PE Batilly - PE Logistique</div>
+      <div class="appver" id="appver">Version 2.8 · PE Batilly - PE Logistique</div>
     </div>
     <span class="grow"></span>
     <button class="state" id="state" type="button"><span class="dot"></span><span class="txt">Connexion…</span></button>
@@ -468,8 +476,9 @@ details.adv[open] summary{margin-bottom:14px}
 
 <script>
 "use strict";
-const APP = { name: "Suivi Top 3 équipe", ver: "2.7", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
+const APP = { name: "Suivi Top 3 équipe", ver: "2.8", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
 const NEWS = {
+  "2.8": ["Compte rendu d'activité par pilote, mis en forme pour Outlook : Diffuser > « Préparer le compte rendu » (ou en bas du Pilotage). Rappel le vendredi après-midi."],
   "2.7": ["Ligne « Travaux annexes » sous le dernier jour : les petites tâches à faire quand on a du temps, sans date ni retard."],
   "2.6": ["Top 3 : un seul jour prévu par objectif. Cliquer un autre jour remplace le premier ; recliquer le jour choisi le retire."],
   "2.5": ["Onglet « Pilotage » : actions en retard, décalées et à arbitrer, objectifs du Top 3 menacés, relance prête par personne (Teams, mail ou copier) et bilan de la tenue des délais de la semaine."],
@@ -495,7 +504,7 @@ const NEWS = {
     "Objectif « atteint », Diffuser (tout est prêt ?, relances, exports CSV), sauvegarde et restauration, exemple."],
   "1.0": ["Tableau partagé par dossier Teams : présence, Top 3 avec jours, priorité du jour, relances."],
 };
-const NEWS_SHORT = "une ligne « Travaux annexes » en bas du tableau, pour les petites tâches à faire quand on a du temps";
+const NEWS_SHORT = "compte rendu d'activité par pilote, prêt pour Outlook (Diffuser > Préparer le compte rendu)";
 const STATUSES = ["Présent", "Télétravail", "Déplacement", "Formation", "Congé", "Absent", "Repos", "Férié"];
 const WORKING = new Set(["Présent", "Télétravail", "Déplacement"]);
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
@@ -915,6 +924,155 @@ function bilanText(pm) {
   return L.join("\n");
 }
 
+/* ——————————— compte rendu d'activité par pilote, mis en forme pour Outlook ———————————
+   Le site n'a pas de serveur : il prépare le compte rendu, le copie mis en forme et ouvre un mail Outlook
+   avec les destinataires et l'objet ; on colle (Ctrl+V) et on envoie. */
+const CR_PARTS = [["synth", "Synthèse des délais"], ["comment", "Commentaires"], ["top3", "Top 3"], ["actions", "Actions"], ["prio", "Priorités du jour"], ["annex", "Travaux annexes"]];
+function crParts() { const d = { synth: true, comment: true, top3: true, actions: true, prio: true, annex: true }; const p = LS.get("crParts", null); return p && typeof p === "object" ? { ...d, ...p } : d; }
+const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function crModel() {
+  const now = new Date(), from = +monday, to = +addDays(monday, 7), cur = isCurrentWeek();
+  const inWeek = (t) => t >= from && t < to;
+  const people = visibleTeam().map((m) => {
+    const threats = new Set(top3Threats(m.id).map((t) => t.k));
+    const tops = [1, 2, 3].map((k) => ({ k, t: val(m.id, "t" + k).trim(), d: daysOf(m.id, k), ok: val(m.id, "d" + k) === "1" })).filter((x) => x.t)
+      .map((x) => ({ ...x, st: x.ok ? "Atteint" : !cur ? "Non atteint" : threats.has(x.k) ? "Menacé" : "En cours" }));
+    const mine = [...ACTIONS.values()].filter((a) => a.owner === m.id);
+    const done = mine.filter((a) => a.done && !isAnnex(a) && (a.doneAt ? inWeek(a.doneAt) : a.week === weekKey)).sort((a, b) => a.doneAt - b.doneAt);
+    const planned = mine.filter((a) => !a.done && a.week === weekKey && actionState(a, now) !== "late").sort((a, b) => actDate(a) - actDate(b));
+    const late = mine.filter((a) => !a.done && actionState(a, now) === "late").sort((a, b) => actDate(a) - actDate(b));
+    const annexDone = mine.filter((a) => isAnnex(a) && a.done && inWeek(a.doneAt));
+    const annexOpen = mine.filter((a) => isAnnex(a) && !a.done).sort((a, b) => a.created - b.created);
+    const prio = []; for (let i = 1; i <= nDays(); i++) { const t = val(m.id, "p" + i).trim(); if (t) prio.push([i, t]); }
+    return { m, comment: val(m.id, "c").trim(), tops, done, planned, late, annexDone, annexOpen, prio };
+  });
+  const pm = pilotModel();
+  return { people, pm, late: pm.items.filter((x) => x.st === "late").length, wk: "S" + pad(isoWeek(monday)), range: `${fmtDM(monday)} – ${fmtDate(addDays(monday, nDays() - 1))}`, group: FILTER && GROUPS.has(FILTER) ? GROUPS.get(FILTER).name : "" };
+}
+const crSubject = (cm) => `Compte rendu d'activité ${cm.wk} (${cm.range})${cm.group ? " · " + cm.group : ""}`;
+const crDay = (a) => (a.day ? DSHORT[a.day - 1].toLowerCase() + ". " + fmtDM(actDate(a)) : "dans la semaine");
+const crLate = (a) => { const n = workDaysBetween(actDate(a), new Date()), mv = movesOf(a); return `prévue ${dShort(actDate(a))}, ${n} j ouvré${n > 1 ? "s" : ""} de retard${mv ? `, décalée ${mv} fois` : ""}`; };
+const crTopDays = (x) => (x.d.length ? x.d.map((d) => DSHORT[d - 1].toLowerCase() + ".").join(", ") : "sans jour");
+function crHtml(cm, P) {
+  const F = "font-family:Aptos,Calibri,Arial,sans-serif;", G = "#5F6670", INK = "#1C1F24";
+  const col = { "Atteint": "#1E9E5A", "En cours": G, "Menacé": "#D23B2F", "Non atteint": "#D23B2F" };
+  const list = (xs) => (xs.length ? xs.join("<br>") : `<span style="color:${G}">–</span>`);
+  const row = (label, content) => `<tr><td style="${F}width:150px;padding:5px 12px 5px 0;vertical-align:top;color:${G};font-size:10pt;border-top:1px solid #E3E6EA">${label}</td><td style="${F}padding:5px 0;vertical-align:top;font-size:10.5pt;color:${INK};border-top:1px solid #E3E6EA">${content}</td></tr>`;
+  const t = cm.pm.total;
+  let o = `<div style="${F}font-size:11pt;color:${INK}">`;
+  o += `<div style="width:140px;height:5px;background:#FFCC33;font-size:1px;line-height:1px">&nbsp;</div>`;
+  o += `<div style="${F}font-size:15pt;font-weight:bold;margin:8px 0 2px">Compte rendu d'activité · ${esc(cm.wk)}</div>`;
+  o += `<div style="${F}font-size:10pt;color:${G};margin-bottom:12px">Du ${esc(cm.range)}${cm.group ? " · " + esc(cm.group) : ""} · ${cm.people.length} pilote(s)</div>`;
+  if (P.synth) {
+    const cell = (v, l, c) => `<td style="${F}padding:8px 14px;background:#F3F4F6;border-top:3px solid ${c};vertical-align:top"><div style="font-size:16pt;font-weight:bold">${v}</div><div style="font-size:9.5pt;color:${G}">${l}</div></td><td style="width:8px"></td>`;
+    o += `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:14px"><tr>`
+      + cell(`${t.td} / ${t.tw}`, "Objectifs du Top 3 atteints", t.tw && t.td === t.tw ? "#1E9E5A" : "#FFCC33")
+      + cell(t.counted ? `${t.inTime} / ${t.counted}` : "–", "Actions faites dans le délai" + (t.rate == null ? "" : ` (${t.rate} %)`), t.rate == null ? "#FFCC33" : t.rate >= 80 ? "#1E9E5A" : t.rate >= 50 ? "#E3870B" : "#D23B2F")
+      + cell(String(cm.late), "Actions en retard", cm.late ? "#D23B2F" : "#1E9E5A")
+      + cell(String(cm.pm.arb.length), "À arbitrer (décalées)", cm.pm.arb.length ? "#E3870B" : "#1E9E5A") + `</tr></table>`;
+  }
+  for (const p of cm.people) {
+    const sub = [p.tops.length ? `Top 3 : ${p.tops.filter((x) => x.ok).length}/${p.tops.length} atteint(s)` : "Top 3 non rempli", `${p.done.length} action(s) faite(s)`, p.late.length ? `${p.late.length} en retard` : ""].filter(Boolean).join(" · ");
+    o += `<div style="${F}background:${INK};color:#FFFFFF;padding:6px 10px;margin-top:14px;font-size:11pt;font-weight:bold">${esc(p.m.name)} <span style="font-weight:normal;color:#FFCC33;font-size:9.5pt">&nbsp;${esc(sub)}</span></div>`;
+    o += `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%">`;
+    if (P.comment && p.comment) o += row("Commentaire", esc(p.comment).replace(/\n/g, "<br>"));
+    if (P.top3) o += row("Top 3", list(p.tops.map((x) => `<b>${x.k}.</b> ${esc(x.t)} <span style="color:${G}">(${esc(crTopDays(x))})</span> <span style="color:${col[x.st]};font-weight:bold">${x.st}</span>`)));
+    if (P.actions) {
+      o += row("Faites", list(p.done.map((a) => `✓ ${esc(a.text)}`)));
+      if (p.planned.length) o += row("Prévues", list(p.planned.map((a) => `${esc(a.text)} <span style="color:${G}">(${esc(crDay(a))})</span>`)));
+      if (p.late.length) o += row(`<span style="color:#D23B2F;font-weight:bold">En retard</span>`, list(p.late.map((a) => `${esc(a.text)} <span style="color:#D23B2F">(${esc(crLate(a))})</span>`)));
+    }
+    if (P.prio && p.prio.length) o += row("Priorités du jour", list(p.prio.map(([i, t]) => `<span style="color:${G}">${DSHORT[i - 1]}.</span> ${esc(t)}`)));
+    if (P.annex && (p.annexDone.length || p.annexOpen.length)) o += row("Travaux annexes", list([...p.annexDone.map((a) => `✓ ${esc(a.text)}`), ...(p.annexOpen.length ? [`<span style="color:${G}">${p.annexOpen.length} à faire quand il y aura du temps</span>`] : [])]));
+    o += `</table>`;
+  }
+  if (P.synth && cm.pm.arb.length) {
+    o += `<div style="${F}font-size:11pt;font-weight:bold;margin-top:16px">À arbitrer en point</div><div style="${F}font-size:10.5pt">`
+      + cm.pm.arb.map((x) => `• ${esc(x.a.text)} <span style="color:${G}">(${esc((member(x.a.owner) || {}).name || "sans pilote")}, décalée ${x.moves} fois, glissement ${x.slip} j ouvrés)</span>`).join("<br>") + `</div>`;
+  }
+  if (CLOUD.team && !EXAMPLE) o += `<div style="${F}font-size:9.5pt;color:${G};margin-top:16px">Suivi en ligne : <a href="${esc(teamLink())}">${esc(teamLink())}</a></div>`;
+  return o + `</div>`;
+}
+function crText(cm, P) {
+  const t = cm.pm.total, L = [crSubject(cm), ""];
+  if (P.synth) L.push(`Top 3 atteints : ${t.td}/${t.tw} · Actions faites dans le délai : ${t.counted ? `${t.inTime}/${t.counted}` : "–"}${t.rate == null ? "" : ` (${t.rate} %)`} · En retard : ${cm.late} · À arbitrer : ${cm.pm.arb.length}`, "");
+  for (const p of cm.people) {
+    L.push(`■ ${p.m.name}`);
+    if (P.comment && p.comment) L.push("Commentaire : " + p.comment.replace(/\n/g, " "));
+    if (P.top3) { if (p.tops.length) p.tops.forEach((x) => L.push(`  Top ${x.k} : ${x.t} (${crTopDays(x)}) – ${x.st}`)); else L.push("  Top 3 non rempli"); }
+    if (P.actions) { p.done.forEach((a) => L.push(`  ✓ ${a.text}`)); p.planned.forEach((a) => L.push(`  Prévue : ${a.text} (${crDay(a)})`)); p.late.forEach((a) => L.push(`  En retard : ${a.text} (${crLate(a)})`)); }
+    if (P.prio && p.prio.length) L.push("  Priorités : " + p.prio.map(([i, x]) => `${DSHORT[i - 1]}. ${x}`).join(" · "));
+    if (P.annex && (p.annexDone.length || p.annexOpen.length)) L.push(`  Travaux annexes : ${p.annexDone.length} faite(s), ${p.annexOpen.length} à faire`);
+    L.push("");
+  }
+  if (P.synth && cm.pm.arb.length) { L.push("À arbitrer en point :"); cm.pm.arb.forEach((x) => L.push(`  • ${x.a.text} (${(member(x.a.owner) || {}).name || "sans pilote"}, décalée ${x.moves} fois, glissement ${x.slip} j ouvrés)`)); }
+  if (CLOUD.team && !EXAMPLE) L.push("", "Suivi en ligne : " + teamLink());
+  return L.join("\n");
+}
+async function copyRich(html, text) {
+  try {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([text], { type: "text/plain" }) })]);
+      return true;
+    }
+  } catch (e) { /* repli ci-dessous */ }
+  try {
+    const d = h("div", { contenteditable: "true", style: "position:fixed;left:-9999px;top:0" }); d.innerHTML = html; document.body.append(d);
+    const r = document.createRange(); r.selectNodeContents(d); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    const ok = document.execCommand("copy"); sel.removeAllRanges(); d.remove(); return ok;
+  } catch (e) { return false; }
+}
+function crRecipients() {
+  const mails = (list) => [...new Set(list.map((m) => m.email).filter(Boolean))];
+  return [["team", "Personnes affichées", mails(visibleTeam())], ...groupList().map((g) => ["g:" + g.id, "Liste « " + g.name + " »", groupEmails(g)]), ["none", "Personne : je choisis dans Outlook", []]];
+}
+function crWin() {
+  flushEdits();
+  const P = crParts(), rec = crRecipients();
+  let to = LS.get("crTo", "");
+  if (!rec.some(([v]) => v === to)) to = FILTER && rec.some(([v]) => v === "g:" + FILTER) ? "g:" + FILTER : "team";
+  const sel = h("select", { class: "inp", "aria-label": "Destinataires" }, ...rec.map(([v, l, e]) => h("option", { value: v }, v === "none" ? l : `${l} (${e.length} adresse${e.length > 1 ? "s" : ""})`)));
+  sel.value = to; on(sel, "change", () => { to = sel.value; LS.set("crTo", to); });
+  const prev = h("div", { class: "crprev", "aria-label": "Aperçu du compte rendu" });
+  let cm = crModel();
+  const draw = () => { prev.innerHTML = crHtml(cm, P); };
+  const boxes = h("div", { class: "crparts" }, ...CR_PARTS.map(([k, l]) => {
+    const cb = h("input", { type: "checkbox", id: "cr-" + k }); cb.checked = !!P[k];
+    on(cb, "change", () => { P[k] = cb.checked; LS.set("crParts", P); draw(); });
+    return h("label", { class: "chk", for: cb.id }, cb, l);
+  }));
+  draw();
+  const go = async (open) => {
+    cm = crModel(); draw();
+    const ok = await copyRich(crHtml(cm, P), crText(cm, P));
+    if (open) {
+      const r = rec.find(([v]) => v === to) || rec[0];
+      const url = `mailto:${r[2].map(encodeURIComponent).join(";")}?subject=${encodeURIComponent(crSubject(cm))}`;
+      const a = h("a", { href: url, style: "display:none" }); document.body.append(a); a.click(); a.remove();
+      if (!EXAMPLE) LS.set("crLast", weekKey); BANSIG = ""; renderBanner();
+    }
+    toast(ok ? (open ? "Compte rendu copié : dans le mail Outlook, clique dans le texte et fais Ctrl+V." : "Compte rendu copié : colle-le (Ctrl+V) dans Outlook ou Teams.") : "Copie impossible dans ce navigateur : sélectionne l'aperçu et copie-le à la main.", !ok);
+  };
+  openWin({
+    title: `Compte rendu d'activité · ${cm.wk}`, size: "large",
+    body: [
+      h("div", { class: "crtools" },
+        h("label", { class: "fld" }, h("span", { class: "lb" }, "Destinataires"), sel, h("span", { class: "help" }, "Les listes se créent dans Diffuser > Listes de diffusion. Les adresses viennent de ⚙ > Équipe.")),
+        h("div", { class: "fld" }, h("span", { class: "lb" }, "Contenu"), boxes)),
+      h("p", { class: "hint" }, `Semaine affichée (${cm.range})${cm.group ? ", groupe « " + cm.group + " »" : ""}, ${cm.people.length} personne(s) affichée(s). Pour une autre semaine ou un autre groupe, ferme et change-les dans la barre.`),
+      prev,
+      h("ol", { class: "crsteps" }, h("li", null, "« Copier et ouvrir Outlook » copie le compte rendu mis en forme et ouvre un nouveau mail avec les destinataires et l'objet."), h("li", null, "Dans Outlook, clique dans le corps du mail et fais Ctrl+V."), h("li", null, "Relis, puis envoie."))],
+    foot: [btn("Copier seulement", "", () => go(false)), sp(), btn("Fermer", "", closeWin), btn("Copier et ouvrir Outlook", "primary", () => go(true))],
+  });
+}
+// rappel du vendredi après-midi, sur l'appareil qui a déjà envoyé un compte rendu
+function crReminderDue() {
+  if (EXAMPLE || !LS.get("crLast", "") || CLOUD.state !== "team") return false;
+  const now = new Date(), d = now.getDay(), wk = ymd(mondayOf(now));
+  if (LS.get("crLast", "") === wk || LS.get("crSnooze", "") === wk) return false;
+  return (d === 5 && now.getHours() >= 14) || d === 6;
+}
+
 /* ——————————— rendu : barre, bandeau, onglets ——————————— */
 function setStateTxt() {
   const b = $("#state"), dot = b.querySelector(".dot"), t = b.querySelector(".txt");
@@ -940,7 +1098,7 @@ let BANSIG = "";
 function renderBanner() {
   // un seul bandeau à la fois : alerte > exemple > nouveauté > ma part à remplir
   const mid = meId(), mm = mid && member(mid);
-  const sig = [CLOUD.state, CLOUD.err, navigator.onLine ? 1 : 0, EXAMPLE ? 1 : 0, LS.get("seenVer", ""), TEAM.length ? 1 : 0, mm && isCurrentWeek() ? whatMissing(mm).join("|") : ""].join("#");
+  const sig = [CLOUD.state, CLOUD.err, navigator.onLine ? 1 : 0, EXAMPLE ? 1 : 0, LS.get("seenVer", ""), TEAM.length ? 1 : 0, mm && isCurrentWeek() ? whatMissing(mm).join("|") : "", crReminderDue() ? 1 : 0].join("#");
   if (sig === BANSIG) return; BANSIG = sig;
   if (!EXAMPLE && CLOUD.state === "noconfig") return banner("red", [h("span", null, "Ce site n'est pas encore relié à sa base Firebase : colle la configuration du projet en haut du script de index.html (voir README). En attendant, « Charger un exemple » permet de le découvrir.")]);
   if (!EXAMPLE && CLOUD.state === "error") return banner("red", [h("span", null, `Connexion à la base impossible (${CLOUD.err}). Vérifie le réseau ; si ça continue, le réseau de l'entreprise bloque peut-être Firebase.`), h("span", { class: "grow" }), on(h("button", { class: "btn sm", type: "button" }, "Réessayer"), "click", () => location.reload())]);
@@ -953,6 +1111,12 @@ function renderBanner() {
   if (m && isCurrentWeek()) {
     const parts = whatMissing(m);
     if (parts.length) return banner("red", [h("span", null, `${firstName(m.name)}, il te reste à remplir ${parts.join(" et ")}.`), h("span", { class: "grow" }), on(h("button", { class: "btn primary sm", type: "button" }, "Remplir"), "click", () => fixFor(m.id))]);
+  }
+  if (crReminderDue()) {
+    const wk = ymd(mondayOf(new Date()));
+    return banner("yellow", [h("span", null, `Fin de semaine : le compte rendu d'activité S${pad(isoWeek(new Date()))} est prêt à envoyer.`), h("span", { class: "grow" }),
+      on(h("button", { class: "btn primary sm", type: "button" }, "Préparer le compte rendu"), "click", () => { if (!isCurrentWeek()) goWeek(new Date()); crWin(); }),
+      on(h("button", { class: "btn sm", type: "button" }, "Pas cette semaine"), "click", () => { LS.set("crSnooze", wk); BANSIG = ""; renderBanner(); })]);
   }
   banner(null);
 }
@@ -1229,7 +1393,7 @@ function pilotView(pm) {
       h("tbody", null, ...pm.bilan.map((b) => row(b, b.m.name))),
       h("tfoot", null, row(pm.total, "Équipe")))),
     h("div", { class: "pfoot" }, h("p", { class: "hint" }, "Tenue des délais = actions faites au plus tard à la date prévue au départ ÷ actions dont cette date est passée (ou déjà faites)."),
-      on(h("button", { class: "btn sm", type: "button" }, "Copier le bilan"), "click", () => copy(bilanText(pm)))));
+      h("div", { class: "ops", style: "gap:8px" }, on(h("button", { class: "btn sm", type: "button" }, "Copier le bilan"), "click", () => copy(bilanText(pm))), on(h("button", { class: "btn sm primary", type: "button" }, "Compte rendu Outlook"), "click", crWin))));
   return [head, tiles, arbBlk, relBlk, bilBlk];
 }
 function addLine(mid, i, annexe) {
@@ -1752,6 +1916,9 @@ function diffuserWin() {
           emails.length ? h("a", { class: "btn", href: mailUrl(emails, groupMsg()) }, "E-mail groupé") : null,
           btn("Copier le message", "", () => copy(groupMsg()))),
         noMail ? h("p", { class: "hint", style: "margin-top:6px" }, `${noMail} personne(s) sans e-mail : ajoute-le dans ⚙ > Équipe pour la relancer en un clic.`) : null) : null,
+      h("div", null, h("h2", { class: "sec" }, h("span", null, "Compte rendu d'activité"), h("span", { class: "fil" }), h("span", { class: "meta" }, "par pilote, mis en forme pour Outlook")),
+        h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn(`Préparer le compte rendu ${"S" + pad(isoWeek(monday))}`, "primary", () => { closeWin(); crWin(); })),
+        h("p", { class: "hint", style: "margin-top:6px" }, "Top 3, actions faites, prévues et en retard, priorités du jour, travaux annexes et synthèse des délais de chaque personne affichée.")),
       listsBlock(),
       h("div", null, h("h2", { class: "sec" }, h("span", null, "Exports pour Excel"), h("span", { class: "fil" })),
         h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn(`Semaine ${isoWeek(monday)} (CSV)`, "", exportWeek), btn("Actions (CSV)", "", exportActions)),
@@ -1902,7 +2069,7 @@ function settingsWin() {
 function helpWin(anchor) {
   const sec = (id, title, ...kids) => h("section", { id: "aide-" + id, class: "help-doc" }, h("h3", null, title), ...kids);
   const li = (...k) => h("li", null, ...k);
-  const toc = [["sert", "À quoi sert l'appli"], ["debut", "Premiers pas"], ["jour", "Au quotidien"], ["annexes", "Travaux annexes"], ["attente", "Actions en attente"], ["pilotage", "Pilotage des délais"], ["diffuser", "Diffuser"], ["partage", "Partage"], ["questions", "Questions fréquentes"], ["news", "Quoi de neuf"]];
+  const toc = [["sert", "À quoi sert l'appli"], ["debut", "Premiers pas"], ["jour", "Au quotidien"], ["annexes", "Travaux annexes"], ["attente", "Actions en attente"], ["pilotage", "Pilotage des délais"], ["compterendu", "Compte rendu"], ["diffuser", "Diffuser"], ["partage", "Partage"], ["questions", "Questions fréquentes"], ["news", "Quoi de neuf"]];
   openWin({
     title: "Aide · mode d'emploi", size: "large",
     body: [
@@ -1937,6 +2104,11 @@ function helpWin(anchor) {
         li("Glisse une action sur un jour du tableau ou d'un onglet pour la planifier ; dépose-la sur « Plus tard » pour la garder sans date."),
         li("« Planifier » : choisis une autre semaine (jusqu'à 5 semaines) et le jour. L'échéance initiale reste affichée."),
         li("Dans un onglet personne : « + Action » sur un jour, et « Mettre en attente » pour reporter une priorité."))),
+      sec("compterendu", "Compte rendu d'activité", h("ul", null,
+        li(h("b", null, "Où"), " : Diffuser > « Préparer le compte rendu », ou le bouton « Compte rendu Outlook » en bas du Pilotage."),
+        li(h("b", null, "Contenu"), " : pour la semaine affichée et les personnes affichées (groupe choisi), par pilote : commentaire, Top 3 et son état, actions faites, prévues et en retard, priorités du jour, travaux annexes, puis la synthèse des délais et les actions à arbitrer. Coche ou décoche les parties ; l'aperçu se met à jour."),
+        li(h("b", null, "Envoi"), " : choisis les destinataires (personnes affichées ou une liste de diffusion), puis « Copier et ouvrir Outlook ». Un mail s'ouvre avec les destinataires et l'objet : clique dans le texte, Ctrl+V, relis et envoie. Le site n'a pas de serveur : il ne peut pas envoyer le mail à ta place."),
+        li(h("b", null, "Rappel du vendredi"), " : après un premier compte rendu, cet appareil affiche le vendredi à partir de 14h un bandeau « compte rendu prêt à envoyer », jusqu'à l'envoi ou « Pas cette semaine »."))),
       sec("diffuser", "Diffuser", h("p", null, "Le bouton jaune affiche le nombre de points manquants. Il ouvre « Tout est prêt ? » (qui n'a pas rempli quoi, avec Corriger, pour le groupe choisi), les relances Teams ou Outlook avec le message déjà écrit, les listes de diffusion (Teams ou e-mail à tout un groupe, message facultatif) et les exports CSV pour Excel.")),
       sec("partage", "Partage", h("ol", null, li("Le suivi est un site web : on l'ouvre avec le lien de l'équipe, sur PC (Edge, Chrome) comme sur téléphone."), li("Aucun compte : le site se connecte tout seul, de façon anonyme. Le lien contient la clé de l'équipe : ne l'envoie qu'aux membres."), li("Les saisies de chacun arrivent en direct chez les autres."), li("Hors ligne, tu peux continuer : tes saisies partent au retour du réseau."), li("Raccourci : favori du navigateur, ou « Ajouter à l'écran d'accueil » sur téléphone."))),
       sec("questions", "Questions fréquentes", h("ul", null,
@@ -1968,8 +2140,8 @@ function loadExample() {
   put({ t: "c", f: "grp_exChef", v: { name: "Chefs d'atelier", members: ["exa"], extra: "chef.tolerie@exemple.fr; chef.montage@exemple.fr" } });
   const f = (m, fld, v) => put({ t: "f", w, m, f: fld, v });
   f("exa", "c", "Point AMR avancé à mercredi : prévoir le plan de charge avant.");
-  f("exa", "t1", "Valider le plan de charge des AMR"); f("exa", "j1", "1,3"); f("exa", "t2", "Former 2 caristes à la ligne d'échange"); f("exa", "j2", "4"); f("exa", "t3", "Clore les écarts de l'audit 5S"); f("exa", "j3", "5"); f("exa", "d1", "1");
-  f("exb", "t1", "Réception des conteneurs semaine 47"); f("exb", "j1", "2"); f("exb", "t2", "Mettre à jour les étiquettes Data Matrix"); f("exb", "j2", "3,4");
+  f("exa", "t1", "Valider le plan de charge des AMR"); f("exa", "j1", "1"); f("exa", "t2", "Former 2 caristes à la ligne d'échange"); f("exa", "j2", "4"); f("exa", "t3", "Clore les écarts de l'audit 5S"); f("exa", "j3", "5"); f("exa", "d1", "1");
+  f("exb", "t1", "Réception des conteneurs semaine 47"); f("exb", "j1", "2"); f("exb", "t2", "Mettre à jour les étiquettes Data Matrix"); f("exb", "j2", "4");
   f("exc", "t1", "Préparer la revue projet de vendredi"); f("exc", "j1", "5"); f("exc", "t2", "Relancer le fournisseur de bacs"); f("exc", "t3", "Plan de formation T1");
   f("exd", "s1", "Congé"); f("exd", "s2", "Congé");
   const ti = ((new Date().getDay() + 6) % 7) + 1;
