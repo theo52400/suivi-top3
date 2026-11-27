@@ -15,7 +15,7 @@ Accès      : une équipe = un identifiant secret de 24 caractères dans le lien
 Données    : un document par case ; la dernière saisie remplace la précédente.
              teams/{équipe} {name, created, by} · members/{id} t:"m" {name,email,order} | null
              actions/{id} t:"a" {text,owner,week,day,done,doneAt,first,created,moves} | null · config/{clé} t:"c" (deadline, samedi ; grp_* = groupe {name, members, extra})
-             cells/{lundi}_{membre}_{champ} t:"f" : f = t1-3 objectif, j1-3 jours prévus, d1-3 atteint,
+             cells/{lundi}_{membre}_{champ} t:"f" : f = t1-3 objectif, j1-3 jour prévu (un seul depuis 2.6), d1-3 atteint,
              s1-6 présence, p1-6 priorité du jour, c commentaire de la semaine ; lu semaine par semaine (where w == lundi).
              Format d'événement identique aux versions 1.x : une sauvegarde 1.x se restaure dans le site.
 Règles     : une case est en rouge si elle est vide après l'heure limite (9h30 par défaut) un jour travaillé
@@ -29,7 +29,8 @@ Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (
              groupes (filtre) et listes de diffusion · 2.2 (20/11/2026) correction du doublon à la création d'une action
              · 2.3 (24/11/2026) une action prévue un jour compte comme priorité du jour
              · 2.4 (24/11/2026) commentaire de la semaine au-dessus du Top 3
-             · 2.5 (26/11/2026) onglet Pilotage des délais (retards, décalages, relances, bilan).
+             · 2.5 (26/11/2026) onglet Pilotage des délais (retards, décalages, relances, bilan)
+             · 2.6 (27/11/2026) un seul jour prévu par objectif du Top 3.
 -->
 <style>
 /* Rendu du service (chapitre R du standard) : barre du haut, cadre à coins coupés, titres à carré jaune. */
@@ -421,7 +422,7 @@ details.adv[open] summary{margin-bottom:14px}
   <div class="in">
     <div>
       <div class="appname">Suivi Top 3 équipe</div>
-      <div class="appver" id="appver">Version 2.5 · PE Batilly - PE Logistique</div>
+      <div class="appver" id="appver">Version 2.6 · PE Batilly - PE Logistique</div>
     </div>
     <span class="grow"></span>
     <button class="state" id="state" type="button"><span class="dot"></span><span class="txt">Connexion…</span></button>
@@ -463,8 +464,9 @@ details.adv[open] summary{margin-bottom:14px}
 
 <script>
 "use strict";
-const APP = { name: "Suivi Top 3 équipe", ver: "2.5", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
+const APP = { name: "Suivi Top 3 équipe", ver: "2.6", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
 const NEWS = {
+  "2.6": ["Top 3 : un seul jour prévu par objectif. Cliquer un autre jour remplace le premier ; recliquer le jour choisi le retire."],
   "2.5": ["Onglet « Pilotage » : actions en retard, décalées et à arbitrer, objectifs du Top 3 menacés, relance prête par personne (Teams, mail ou copier) et bilan de la tenue des délais de la semaine."],
   "2.4": ["Commentaire de la semaine : une case au-dessus du Top 3 de chaque personne, repliée en « + Commentaire » tant qu'elle est vide."],
   "2.3": ["Une action prévue un jour compte comme priorité de ce jour, comme un Top : la case n'est plus rouge."],
@@ -488,7 +490,7 @@ const NEWS = {
     "Objectif « atteint », Diffuser (tout est prêt ?, relances, exports CSV), sauvegarde et restauration, exemple."],
   "1.0": ["Tableau partagé par dossier Teams : présence, Top 3 avec jours, priorité du jour, relances."],
 };
-const NEWS_SHORT = "onglet Pilotage : retards, décalages, relances prêtes et bilan des délais";
+const NEWS_SHORT = "un seul jour prévu par objectif du Top 3";
 const STATUSES = ["Présent", "Télétravail", "Déplacement", "Formation", "Congé", "Absent", "Repos", "Férié"];
 const WORKING = new Set(["Présent", "Télétravail", "Déplacement"]);
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
@@ -1038,7 +1040,7 @@ function numBtn(m, k) {
   return b;
 }
 function dayPicker(m, k) {
-  const wrap = h("div", { class: "daypick", role: "group", "aria-label": `Jours prévus pour l'objectif ${k}` });
+  const wrap = h("div", { class: "daypick", role: "group", "aria-label": `Jour prévu pour l'objectif ${k} (un seul)` });
   REFS[m.id].picks[k] = [];
   const ti = todayIndex();
   for (let d = 1; d <= nDays(); d++) {
@@ -1090,7 +1092,7 @@ function teamView() {
   const trNote = h("tr", { class: "noterow" }, h("th", { class: "rh", scope: "row" }, h("span", { class: "d" }, "Commentaire"), h("span", { class: "dt" }, "de la semaine")));
   for (const m of list) trNote.append(h("td", { class: "c" }, h("div", { class: "cell" }, noteBox(m, false))));
   tb.append(trNote);
-  const trTop = h("tr", null, h("th", { class: "rh", scope: "row" }, h("span", { class: "d" }, "Top 3"), h("span", { class: "dt" }, "objectifs et jours prévus")));
+  const trTop = h("tr", null, h("th", { class: "rh", scope: "row" }, h("span", { class: "d" }, "Top 3"), h("span", { class: "dt" }, "objectifs et jour prévu")));
   for (const m of list) {
     const r = REFS[m.id];
     const box = h("div", { class: "t3" });
@@ -1149,7 +1151,7 @@ function personView(m) {
   r.pend = pend;
   return [head,
     h("div", { class: "pv-note" }, noteBox(m, true)),
-    h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "Top 3 de la semaine"), h("span", { class: "fil" }), h("span", { class: "meta" }, "coche les jours prévus")), tops),
+    h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "Top 3 de la semaine"), h("span", { class: "fil" }), h("span", { class: "meta" }, "un jour prévu par objectif")), tops),
     h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, `Plan de la semaine ${isoWeek(monday)}`), h("span", { class: "fil" })), legend(), week),
     h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "En attente"), h("span", { class: "fil" }), h("span", { class: "meta", id: "pv-pend-meta" }, "")),
       h("p", { class: "hint", style: "margin-bottom:6px" }, "Glisse une action sur un jour pour la planifier, ou ouvre-la pour choisir une autre semaine."), pend,
@@ -1240,7 +1242,7 @@ function welcomeView() {
   else { t2 = "Crée l'équipe une seule fois, puis envoie son lien aux collègues. Tu as déjà reçu un lien ? Ouvre-le ou colle-le ici."; b2 = h("div", { class: "ops", style: "flex-wrap:wrap;gap:8px" }, btn("Créer l'équipe", "primary sm", createTeamWin), btn("J'ai un lien d'équipe", "sm", joinWin)); }
   if (CLOUD.state === "team" && !LASTSYNC) return [h("h2", { class: "sec" }, h("span", null, "Chargement"), h("span", { class: "fil" })), h("p", { class: "empty-note" }, `Ouverture de l'équipe « ${CLOUD.teamName} »…`)];
   return [h("h2", { class: "sec" }, h("span", null, "Bienvenue"), h("span", { class: "fil" })),
-    h("p", { style: "margin:0 0 14px;max-width:70ch" }, "Chaque collaborateur écrit son Top 3 de la semaine, coche les jours prévus et remplit sa priorité du jour. Tu vois d'un coup d'œil ce qui manque et tu relances en un clic. Aucun compte : un lien d'équipe suffit, sur PC comme sur téléphone."),
+    h("p", { style: "margin:0 0 14px;max-width:70ch" }, "Chaque collaborateur écrit son Top 3 de la semaine, choisit le jour prévu de chaque objectif et remplit sa priorité du jour. Tu vois d'un coup d'œil ce qui manque et tu relances en un clic. Aucun compte : un lien d'équipe suffit, sur PC comme sur téléphone."),
     h("div", { class: "steps" },
       step(1, s1, "Ton nom", "Il signe tes saisies et retrouve ta colonne.", on(h("button", { class: "btn primary sm", type: "button" }, "Écrire mon nom"), "click", () => askName())),
       step(2, s2, "L'équipe en ligne", t2, b2),
@@ -1383,7 +1385,11 @@ const viewEl = $("#view");
 on(viewEl, "input", (e) => { const t = e.target; if (t.dataset.f && t.tagName !== "SELECT") { edit(t.dataset.mid, t.dataset.f, t.value, false); if (t.tagName === "TEXTAREA") autosize(t); } });
 on(viewEl, "change", (e) => {
   const t = e.target;
-  if (t.dataset.j) { const mid = t.dataset.mid, k = t.dataset.j; const v = REFS[mid].picks[k].filter((c) => c.checked).map((c) => c.dataset.d).join(","); edit(mid, "j" + k, v, true); }
+  if (t.dataset.j) {   // un seul jour par objectif : cocher un jour décoche les autres, recliquer le jour le retire
+    const mid = t.dataset.mid, k = t.dataset.j;
+    REFS[mid].picks[k].forEach((c) => { if (c !== t) c.checked = false; });
+    edit(mid, "j" + k, t.checked ? t.dataset.d : "", true);
+  }
   else if (t.dataset.done && t.type === "checkbox") setField(t.dataset.mid, "d" + t.dataset.done, t.checked ? "1" : "");
   else if (t.dataset.f) edit(t.dataset.mid, t.dataset.f, t.value, true);
 });
@@ -1872,13 +1878,13 @@ function helpWin(anchor) {
     title: "Aide · mode d'emploi", size: "large",
     body: [
       h("nav", { class: "toc", "aria-label": "Sommaire" }, ...toc.map(([id, t]) => on(h("a", { href: "#aide-" + id }, t), "click", (e) => { e.preventDefault(); const s = document.getElementById("aide-" + id); s && s.scrollIntoView({ block: "start" }); }))),
-      sec("sert", "À quoi sert l'appli", h("p", null, "Chaque collaborateur écrit son Top 3 de la semaine, coche les jours où il le traite (L M M J V S) et remplit sa priorité du jour. Le responsable voit ce qui manque et relance en un clic. Pour qui : l'équipe. Durée : 1 minute par jour.")),
+      sec("sert", "À quoi sert l'appli", h("p", null, "Chaque collaborateur écrit son Top 3 de la semaine, choisit le jour où il traite chaque objectif (L M M J V S, un seul jour) et remplit sa priorité du jour. Le responsable voit ce qui manque et relance en un clic. Pour qui : l'équipe. Durée : 1 minute par jour.")),
       sec("debut", "Premiers pas", h("ol", null, li("Le responsable crée l'équipe une fois (⚙ > Équipe en ligne > Créer l'équipe) et envoie le lien aux collègues."), li("Chacun ouvre le lien et écrit son nom. Aucun compte à créer."), li("⚙ > Gérer l'équipe : ajoute les personnes avec leur e-mail (une seule fois pour toute l'équipe)."), li("Pour découvrir sans risque : ⚙ > Réglages avancés > Charger un exemple."))),
       sec("jour", "Au quotidien", h("ul", null,
         li(h("b", null, "Onglets"), " : « Équipe » montre tout le monde ; « Ma semaine » et l'onglet de chaque personne montrent son plan, jour par jour. Le chiffre rouge = cases à remplir."),
         li(h("b", null, "Priorité du jour"), " : clic sur le petit « + » pour ouvrir la case ; Entrée pour valider. Quittée vide, elle se referme. Une action prévue ce jour-là compte aussi comme priorité. Un jour travaillé, après 9h30, sans rien de prévu, le « + » devient « + À remplir » en rouge."),
         li(h("b", null, "Commentaire"), " : au-dessus du Top 3, clic sur « + Commentaire » pour écrire une note sur la semaine (Entrée passe à la ligne). Il reste attaché à la semaine et se voit par toute l'équipe. Effacé, il se replie."),
-        li(h("b", null, "Jours prévus"), " : sous chaque objectif, coche L M M J V S ; l'objectif apparaît en étiquette dans la case du jour et compte comme priorité de ce jour : la case se replie en un petit « + », à cliquer pour ajouter une autre priorité. Clic sur l'étiquette : modifier l'objectif."),
+        li(h("b", null, "Jour prévu"), " : sous chaque objectif, choisis un seul jour (L M M J V S) ; cliquer un autre jour le remplace, recliquer le jour choisi le retire ; l'objectif apparaît en étiquette dans la case du jour et compte comme priorité de ce jour : la case se replie en un petit « + », à cliquer pour ajouter une autre priorité. Clic sur l'étiquette : modifier l'objectif."),
         li(h("b", null, "Objectif atteint"), " : clic sur le numéro (il passe en vert ✓)."),
         li(h("b", null, "Présence"), " : Congé, Absent, Formation, Repos ou Férié : la case du jour disparaît et rien n'est compté manquant."),
         li(h("b", null, "Code couleur"), " : chaque statut a sa couleur, en liseré à gauche de la case (légende sous les tuiles). « Masquer les présences » enlève les listes et les couleurs sur ton appareil ; les absences restent prises en compte."),
