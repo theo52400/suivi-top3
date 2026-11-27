@@ -14,7 +14,7 @@ Accès      : une équipe = un identifiant secret de 24 caractères dans le lien
              personne ne peut lire ni écrire (règles Firestore : pas de liste des équipes).
 Données    : un document par case ; la dernière saisie remplace la précédente.
              teams/{équipe} {name, created, by} · members/{id} t:"m" {name,email,order} | null
-             actions/{id} t:"a" {text,owner,week,day,done,doneAt,first,created,moves} | null · config/{clé} t:"c" (deadline, samedi ; grp_* = groupe {name, members, extra})
+             actions/{id} t:"a" {text,owner,week,day,done,doneAt,first,created,moves,annexe} | null · config/{clé} t:"c" (deadline, samedi ; grp_* = groupe {name, members, extra})
              cells/{lundi}_{membre}_{champ} t:"f" : f = t1-3 objectif, j1-3 jour prévu (un seul depuis 2.6), d1-3 atteint,
              s1-6 présence, p1-6 priorité du jour, c commentaire de la semaine ; lu semaine par semaine (where w == lundi).
              Format d'événement identique aux versions 1.x : une sauvegarde 1.x se restaure dans le site.
@@ -30,7 +30,8 @@ Versions   : 1.0 à 1.5 (12/11/2026) fichier partagé par dossier Teams · 2.0 (
              · 2.3 (24/11/2026) une action prévue un jour compte comme priorité du jour
              · 2.4 (24/11/2026) commentaire de la semaine au-dessus du Top 3
              · 2.5 (26/11/2026) onglet Pilotage des délais (retards, décalages, relances, bilan)
-             · 2.6 (27/11/2026) un seul jour prévu par objectif du Top 3.
+             · 2.6 (27/11/2026) un seul jour prévu par objectif du Top 3
+             · 2.7 (27/11/2026) ligne « Travaux annexes » (petites tâches sans date).
 -->
 <style>
 /* Rendu du service (chapitre R du standard) : barre du haut, cadre à coins coupés, titres à carré jaune. */
@@ -189,6 +190,9 @@ tr.off>td{background:var(--block)}
 td.c{min-width:0;overflow-wrap:anywhere}
 .cell{display:flex;flex-direction:column;gap:6px;padding:8px 10px}
 .board td.off-cell{background:var(--block)}
+.board tr.annexrow>*{border-top:2px solid var(--ink)}
+.board tr.annexrow .cell{display:flex;flex-direction:column;gap:6px}
+.annexblk .items{margin-bottom:8px}
 td.miss .case{border-color:var(--red);background:var(--tint-r)}
 
 /* champs */
@@ -422,7 +426,7 @@ details.adv[open] summary{margin-bottom:14px}
   <div class="in">
     <div>
       <div class="appname">Suivi Top 3 équipe</div>
-      <div class="appver" id="appver">Version 2.6 · PE Batilly - PE Logistique</div>
+      <div class="appver" id="appver">Version 2.7 · PE Batilly - PE Logistique</div>
     </div>
     <span class="grow"></span>
     <button class="state" id="state" type="button"><span class="dot"></span><span class="txt">Connexion…</span></button>
@@ -464,8 +468,9 @@ details.adv[open] summary{margin-bottom:14px}
 
 <script>
 "use strict";
-const APP = { name: "Suivi Top 3 équipe", ver: "2.6", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
+const APP = { name: "Suivi Top 3 équipe", ver: "2.7", schema: 2, service: "PE Batilly - PE Logistique", stock: "top3" };
 const NEWS = {
+  "2.7": ["Ligne « Travaux annexes » sous le dernier jour : les petites tâches à faire quand on a du temps, sans date ni retard."],
   "2.6": ["Top 3 : un seul jour prévu par objectif. Cliquer un autre jour remplace le premier ; recliquer le jour choisi le retire."],
   "2.5": ["Onglet « Pilotage » : actions en retard, décalées et à arbitrer, objectifs du Top 3 menacés, relance prête par personne (Teams, mail ou copier) et bilan de la tenue des délais de la semaine."],
   "2.4": ["Commentaire de la semaine : une case au-dessus du Top 3 de chaque personne, repliée en « + Commentaire » tant qu'elle est vide."],
@@ -490,7 +495,7 @@ const NEWS = {
     "Objectif « atteint », Diffuser (tout est prêt ?, relances, exports CSV), sauvegarde et restauration, exemple."],
   "1.0": ["Tableau partagé par dossier Teams : présence, Top 3 avec jours, priorité du jour, relances."],
 };
-const NEWS_SHORT = "un seul jour prévu par objectif du Top 3";
+const NEWS_SHORT = "une ligne « Travaux annexes » en bas du tableau, pour les petites tâches à faire quand on a du temps";
 const STATUSES = ["Présent", "Télétravail", "Déplacement", "Formation", "Congé", "Absent", "Repos", "Férié"];
 const WORKING = new Set(["Présent", "Télétravail", "Déplacement"]);
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
@@ -585,7 +590,7 @@ function cleanAction(v) {
   if (!v || typeof v !== "object" || typeof v.text !== "string" || !v.text.trim()) return null;
   const week = /^\d{4}-\d{2}-\d{2}$/.test(v.week) ? v.week : "";
   const day = week ? Math.max(0, Math.min(6, Math.round(Number(v.day) || 0))) : 0;
-  return { text: v.text.trim().slice(0, 300), owner: typeof v.owner === "string" ? v.owner : "", week, day, done: !!v.done, doneAt: Number(v.doneAt) || 0, first: typeof v.first === "string" ? v.first : "", created: Number(v.created) || 0, moves: Math.max(0, Math.min(99, Math.round(Number(v.moves) || 0))) };
+  return { text: v.text.trim().slice(0, 300), owner: typeof v.owner === "string" ? v.owner : "", week, day, done: !!v.done, doneAt: Number(v.doneAt) || 0, first: typeof v.first === "string" ? v.first : "", created: Number(v.created) || 0, moves: Math.max(0, Math.min(99, Math.round(Number(v.moves) || 0))), annexe: !!v.annexe };
 }
 function computeState(iter) {
   const last = new Map();
@@ -795,7 +800,9 @@ function actionState(a, now = new Date()) {
   if (!a.week) return "later";
   return actDate(a) < startOfDay(now) ? "late" : "planned";
 }
-function whenLabel(a) { if (!a.week) return "Plus tard"; const w = parseYmd(a.week); return weekLabel(a.week) + (a.day ? ` · ${DSHORT[a.day - 1]} ${fmtDM(addDays(w, a.day - 1))}` : ""); }
+// travaux annexes : petites tâches sans date, à faire quand on a du temps (hors retards et hors « En attente »)
+const isAnnex = (a) => !!a.annexe && !a.week;
+function whenLabel(a) { if (!a.week) return isAnnex(a) ? "Travaux annexes" : "Plus tard"; const w = parseYmd(a.week); return weekLabel(a.week) + (a.day ? ` · ${DSHORT[a.day - 1]} ${fmtDM(addDays(w, a.day - 1))}` : ""); }
 function firstLabel(a) {
   if (!a.first || a.first === `${a.week}|${a.day}`) return "";
   const [w, d] = a.first.split("|"); if (!w) return "";
@@ -803,7 +810,7 @@ function firstLabel(a) {
 }
 function saveAction(id, patch) {
   const cur = ACTIONS.get(id);
-  const base = cur ? { text: cur.text, owner: cur.owner, week: cur.week, day: cur.day, done: cur.done, doneAt: cur.doneAt, first: cur.first, created: cur.created, moves: cur.moves || 0 } : { text: "", owner: "", week: "", day: 0, done: false, doneAt: 0, first: "", created: Date.now(), moves: 0 };
+  const base = cur ? { text: cur.text, owner: cur.owner, week: cur.week, day: cur.day, done: cur.done, doneAt: cur.doneAt, first: cur.first, created: cur.created, moves: cur.moves || 0, annexe: !!cur.annexe } : { text: "", owner: "", week: "", day: 0, done: false, doneAt: 0, first: "", created: Date.now(), moves: 0, annexe: false };
   const v = { ...base, ...patch };
   if (!v.week) v.day = 0;
   // décalage : une action prévue, pas faite, repoussée plus tard ou renvoyée en attente
@@ -816,7 +823,7 @@ function saveAction(id, patch) {
   if (patch.done === false) v.doneAt = 0;
   emit({ t: "a", m: id, v });
 }
-const pendingActions = () => [...ACTIONS.values()].filter((a) => !a.done);
+const pendingActions = () => [...ACTIONS.values()].filter((a) => !a.done && !isAnnex(a));
 const lateActions = () => [...ACTIONS.values()].filter((a) => actionState(a) === "late");
 function dayItems(mid, i) {
   const tops = [];
@@ -1114,6 +1121,12 @@ function teamView() {
     }
     tb.append(tr);
   }
+  const trAn = h("tr", { class: "annexrow" }, h("th", { class: "rh", scope: "row" }, h("span", { class: "d" }, "Travaux annexes"), h("span", { class: "dt" }, "quand on a du temps")));
+  for (const m of list) {
+    const box = h("div", { class: "items" }); REFS[m.id].annex = box;
+    trAn.append(h("td", { class: "c", "data-drop": `${m.id}|annexe` }, h("div", { class: "cell" }, box, addLine(m.id, 0, true))));
+  }
+  tb.append(trAn);
   // colonnes de même largeur ; au-delà de l'écran, le tableau défile dans son cadre
   const table = h("table", { class: "board", style: `min-width:${112 + list.length * 220}px` }, h("colgroup", null, h("col", { class: "c-rh" }), ...list.map(() => h("col"))), h("thead", null, hr), tb);
   return [head, tiles, legend(), h("div", { class: "board-scroll" }, table), h("p", { class: "hint", style: "margin-top:10px" }, "Clic sur un nom : son plan de la semaine. Les actions en attente se glissent sur un jour.")];
@@ -1153,6 +1166,8 @@ function personView(m) {
     h("div", { class: "pv-note" }, noteBox(m, true)),
     h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "Top 3 de la semaine"), h("span", { class: "fil" }), h("span", { class: "meta" }, "un jour prévu par objectif")), tops),
     h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, `Plan de la semaine ${isoWeek(monday)}`), h("span", { class: "fil" })), legend(), week),
+    h("div", { class: "blk annexblk", "data-drop": `${m.id}|annexe` }, h("h2", { class: "sec" }, h("span", null, "Travaux annexes"), h("span", { class: "fil" }), h("span", { class: "meta" }, "petites tâches à faire quand tu as du temps")),
+      (r.annex = h("div", { class: "items" })), addLine(m.id, 0, true)),
     h("div", { class: "blk" }, h("h2", { class: "sec" }, h("span", null, "En attente"), h("span", { class: "fil" }), h("span", { class: "meta", id: "pv-pend-meta" }, "")),
       h("p", { class: "hint", style: "margin-bottom:6px" }, "Glisse une action sur un jour pour la planifier, ou ouvre-la pour choisir une autre semaine."), pend,
       h("div", { style: "margin-top:10px" }, on(h("button", { class: "btn sm", type: "button" }, "+ Nouvelle action"), "click", () => actionWin(null, { owner: m.id }))))];
@@ -1217,13 +1232,13 @@ function pilotView(pm) {
       on(h("button", { class: "btn sm", type: "button" }, "Copier le bilan"), "click", () => copy(bilanText(pm)))));
   return [head, tiles, arbBlk, relBlk, bilBlk];
 }
-function addLine(mid, i) {
+function addLine(mid, i, annexe) {
   const wrap = h("div", null);
-  const btn = on(h("button", { class: "addline", type: "button" }, "+ Action"), "click", () => {
-    const inp = h("input", { class: "inp addinp", maxlength: "300", placeholder: "Action, puis Entrée", "aria-label": "Nouvelle action" });
+  const btn = on(h("button", { class: "addline", type: "button", title: annexe ? "Petite tâche à faire quand on a du temps" : null }, annexe ? "+ Tâche annexe" : "+ Action"), "click", () => {
+    const inp = h("input", { class: "inp addinp", maxlength: "300", placeholder: annexe ? "Tâche annexe, puis Entrée" : "Action, puis Entrée", "aria-label": annexe ? "Nouvelle tâche annexe" : "Nouvelle action" });
     // un champ n'enregistre qu'une fois : retirer le champ après Entrée déclenche aussi « blur »
     let closed = false;
-    const done = (keep) => { if (closed) return; closed = true; const t = inp.value.trim(); inp.value = ""; if (keep && t) { saveAction(uid(), { text: t, owner: mid, week: weekKey, day: i }); } wrap.replaceChildren(btn); update(); };
+    const done = (keep) => { if (closed) return; closed = true; const t = inp.value.trim(); inp.value = ""; if (keep && t) { saveAction(uid(), annexe ? { text: t, owner: mid, week: "", day: 0, annexe: true } : { text: t, owner: mid, week: weekKey, day: i }); } wrap.replaceChildren(btn); update(); };
     on(inp, "keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); done(true); setTimeout(() => btn.click(), 0); } else if (e.key === "Escape") done(false); });
     on(inp, "blur", () => done(true));
     wrap.replaceChildren(inp); inp.focus();
@@ -1322,17 +1337,18 @@ function update() {
       fillItems(mid, i, r.items[i], VIEW === "team" ? 3 : 99);
       if (r.irow[i]) r.irow[i].hidden = !r.items[i].childElementCount && r.plus[i].hidden;
     }
+    fillAnnex(mid, r.annex, VIEW === "team" ? 4 : 99);
     if (r.state) {
       const n = md.length + (mt ? 1 : 0);
       r.state.replaceChildren(n ? h("span", { class: "et bad" }, `✕ ${n} à remplir`) : h("span", { class: "et ok" }, "✓ À jour"));
     }
-    if (r.pend) fillPending(r.pend, (a) => a.owner === mid && !a.done && !(a.week === weekKey && a.day), true);
+    if (r.pend) fillPending(r.pend, (a) => a.owner === mid && !a.done && !isAnnex(a) && !(a.week === weekKey && a.day), true);
   }
   if (VIEW !== "team" && member(VIEW)) {
     const all = [...ACTIONS.values()].filter((a) => a.owner === VIEW);
     const wk = all.filter((a) => a.week === weekKey), dn = wk.filter((a) => a.done).length;
     const sub = $("#pv-sub"); if (sub) sub.textContent = `${wk.length} action(s) prévue(s) cette semaine${wk.length ? `, ${dn} faite(s)` : ""} · ${all.filter((a) => actionState(a) === "late").length} en retard`;
-    const pm = $("#pv-pend-meta"); if (pm) pm.textContent = `${all.filter((a) => !a.done && !(a.week === weekKey && a.day)).length} action(s)`;
+    const pm = $("#pv-pend-meta"); if (pm) pm.textContent = `${all.filter((a) => !a.done && !isAnnex(a) && !(a.week === weekKey && a.day)).length} action(s)`;
   }
   renderTiles(); renderToolbar(); renderTabs(); renderBanner();
 }
@@ -1350,6 +1366,17 @@ function fillItems(mid, i, box, max) {
     nodes.push(b);
   }
   for (const a of acts) nodes.push(actLine(a));
+  if (nodes.length > max + 1) { const rest = nodes.length - max; nodes.splice(max); nodes.push(on(h("button", { class: "more", type: "button" }, `+ ${rest} autre(s)`), "click", () => setView(mid))); }
+  box.replaceChildren(...nodes);
+}
+function fillAnnex(mid, box, max) {
+  if (!box) return;
+  const from = +monday, to = +addDays(monday, 7);
+  const list = [...ACTIONS.values()].filter((a) => a.owner === mid && isAnnex(a) && (!a.done || (a.doneAt >= from && a.doneAt < to)))
+    .sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || a.created - b.created);
+  const sig = JSON.stringify([list.map((a) => [a.id, a.text, a.done]), max]);
+  if (box.dataset.sig === sig) return; box.dataset.sig = sig;
+  const nodes = list.map(actLine);
   if (nodes.length > max + 1) { const rest = nodes.length - max; nodes.splice(max); nodes.push(on(h("button", { class: "more", type: "button" }, `+ ${rest} autre(s)`), "click", () => setView(mid))); }
   box.replaceChildren(...nodes);
 }
@@ -1416,7 +1443,8 @@ document.addEventListener("drop", (e) => {
   e.preventDefault(); const id = DRAG, a = ACTIONS.get(id);
   DRAG = null; document.body.classList.remove("dragging"); document.querySelectorAll(".drop-over").forEach((x) => x.classList.remove("drop-over"));
   if (!a) return;
-  if (t.dataset.drop === "later") { saveAction(id, { week: "", day: 0 }); toast("Action gardée pour plus tard."); }
+  if (t.dataset.drop === "later") { saveAction(id, { week: "", day: 0, annexe: false }); toast("Action gardée pour plus tard."); }
+  else if (/\|annexe$/.test(t.dataset.drop)) { const mid = t.dataset.drop.split("|")[0]; saveAction(id, { owner: mid, week: "", day: 0, annexe: true }); toast("Rangée dans les travaux annexes" + (mid !== a.owner ? " de " + firstName((member(mid) || {}).name) : "") + "."); }
   else { const [mid, d] = t.dataset.drop.split("|"); saveAction(id, { owner: mid, week: weekKey, day: +d }); toast(`Action planifiée : ${DAYS[+d - 1].toLowerCase()} ${fmtDM(addDays(monday, +d - 1))}${mid !== a.owner ? " pour " + firstName((member(mid) || {}).name) : ""}.`); }
   render();
 });
@@ -1487,7 +1515,7 @@ function renderDrawer(full) {
   const f = (a) => !DR_OWNER || a.owner === DR_OWNER;
   const all = [...ACTIONS.values()].filter(f);
   const late = all.filter((a) => actionState(a) === "late").sort((a, b) => actDate(a) - actDate(b));
-  const later = all.filter((a) => actionState(a) === "later").sort((a, b) => a.created - b.created);
+  const later = all.filter((a) => actionState(a) === "later" && !isAnnex(a)).sort((a, b) => a.created - b.created);
   const planned = all.filter((a) => actionState(a) === "planned").sort((a, b) => actDate(a) - actDate(b));
   const done = all.filter((a) => a.done).sort((a, b) => b.doneAt - a.doneAt).slice(0, 10);
   const group = (title, cls, list, drop, emptyTxt) => {
@@ -1557,17 +1585,17 @@ function segGroup(options, value, onPick) {
 
 function actionWin(id, preset) {
   const a = id ? ACTIONS.get(id) : null;
-  const st = { text: a ? a.text : "", owner: a ? a.owner : (preset && preset.owner) || DR_OWNER || meId() || "", week: a ? a.week : (preset && preset.week) || "", day: a ? a.day : (preset && preset.day) || 0, done: a ? a.done : false };
+  const st = { text: a ? a.text : "", owner: a ? a.owner : (preset && preset.owner) || DR_OWNER || meId() || "", week: a ? (isAnnex(a) ? "annexe" : a.week) : (preset && preset.week) || "", day: a ? a.day : (preset && preset.day) || 0, done: a ? a.done : false };
   const txt = h("input", { class: "inp", maxlength: "300", value: st.text, "data-autofocus": "", "aria-label": "Action" });
   const own = h("select", { class: "inp", "aria-label": "Pilote" }, h("option", { value: "" }, "Sans pilote"), ...TEAM.map((m) => h("option", { value: m.id }, m.name))); own.value = st.owner;
   const cur = mondayOf(new Date());
-  const weeks = [["", "Plus tard"]];
+  const weeks = [["", "Plus tard"], ["annexe", "Travaux annexes"]];
   for (let n = 0; n < 6; n++) { const w = addDays(cur, 7 * n); weeks.push([ymd(w), (n === 0 ? "Cette semaine · " : n === 1 ? "Semaine prochaine · " : "") + "S" + pad(isoWeek(w))]); }
-  if (st.week && !weeks.some(([v]) => v === st.week)) weeks.splice(1, 0, [st.week, weekLabel(st.week)]);
+  if (st.week && !weeks.some(([v]) => v === st.week)) weeks.splice(2, 0, [st.week, weekLabel(st.week)]);
   const dayBox = h("div", { class: "fld" });
   const drawDays = () => {
-    dayBox.hidden = !st.week;
-    if (!st.week) return;
+    dayBox.hidden = !st.week || st.week === "annexe";
+    if (dayBox.hidden) return;
     const w = parseYmd(st.week);
     dayBox.replaceChildren(h("span", { class: "lb" }, "Jour"), segGroup([[0, "Dans la semaine"], ...[1, 2, 3, 4, 5, 6].slice(0, nDays()).map((d) => [d, `${DSHORT[d - 1]} ${fmtDM(addDays(w, d - 1))}`])], st.day, (v) => { st.day = v; }));
   };
@@ -1576,8 +1604,9 @@ function actionWin(id, preset) {
   const fl = a ? firstLabel(a) : "";
   const save = () => {
     const t = txt.value.trim(); if (!t) { txt.focus(); toast("Écris l'action avant d'enregistrer.", true); return; }
-    saveAction(id || uid(), { text: t, owner: own.value, week: st.week, day: st.week ? st.day : 0, done: doneCb.checked });
-    closeWin(); render(); toast(st.week ? "Action planifiée : " + whenLabel({ week: st.week, day: st.day }) + "." : "Action gardée pour plus tard.");
+    const ann = st.week === "annexe", wk = ann ? "" : st.week;
+    saveAction(id || uid(), { text: t, owner: own.value, week: wk, day: wk ? st.day : 0, done: doneCb.checked, annexe: ann });
+    closeWin(); render(); toast(ann ? "Rangée dans les travaux annexes." : wk ? "Action planifiée : " + whenLabel({ week: wk, day: st.day }) + "." : "Action gardée pour plus tard.");
   };
   on(txt, "keydown", (e) => { if (e.key === "Enter") save(); });
   const del = a ? btn("Supprimer", "danger", async () => { if (await confirmWin("Supprimer l'action ?", `« ${a.text} » sera supprimée pour toute l'équipe.`, "Supprimer", true)) { emit({ t: "a", m: a.id, v: null }); render(); toast("Action supprimée."); } else actionWin(id); }) : null;
@@ -1585,7 +1614,7 @@ function actionWin(id, preset) {
     title: a ? "Action" : "Nouvelle action", size: "small",
     body: [h("label", { class: "fld" }, h("span", { class: "lb" }, "Action"), txt, h("span", { class: "help" }, "Une phrase courte : quoi faire.")),
       h("label", { class: "fld" }, h("span", { class: "lb" }, "Pilote"), own),
-      h("div", { class: "fld" }, h("span", { class: "lb" }, "Quand"), segGroup(weeks, st.week, (v) => { st.week = v; if (!v) st.day = 0; drawDays(); }), fl ? h("span", { class: "help" }, "Échéance " + fl) : null),
+      h("div", { class: "fld" }, h("span", { class: "lb" }, "Quand"), segGroup(weeks, st.week, (v) => { st.week = v; if (!v || v === "annexe") st.day = 0; drawDays(); }), fl ? h("span", { class: "help" }, "Échéance " + fl) : null),
       dayBox,
       h("label", { class: "chk", for: "aw-done" }, doneCb, "Action faite")],
     foot: [del, sp(), btn("Annuler", "", closeWin), btn("Enregistrer", "primary", save)],
@@ -1772,7 +1801,7 @@ async function exportActions() {
   for (const a of [...ACTIONS.values()].sort((x, y) => x.created - y.created)) {
     const d = a.week && a.day ? addDays(parseYmd(a.week), a.day - 1) : null;
     const [fw, fd] = (a.first || "").split("|");
-    rows.push([a.text, (member(a.owner) || {}).name || "", a.week ? weekLabel(a.week) : "", a.day ? DAYS[a.day - 1] : "", d ? fmtDate(d) : "", fw ? weekLabel(fw) + (+fd ? " " + DSHORT[+fd - 1] : "") : "", st[actionState(a)], a.created ? fmtDate(new Date(a.created)) : "", a._by]);
+    rows.push([a.text, (member(a.owner) || {}).name || "", a.week ? weekLabel(a.week) : "", a.day ? DAYS[a.day - 1] : "", d ? fmtDate(d) : "", fw ? weekLabel(fw) + (+fd ? " " + DSHORT[+fd - 1] : "") : "", isAnnex(a) && !a.done ? "Travaux annexes" : st[actionState(a)], a.created ? fmtDate(new Date(a.created)) : "", a._by]);
   }
   const where = await saveOut("Exports", `Suivi_Top3_Actions_${ymd(new Date())}.csv`, csv(rows));
   toast("Export des actions enregistré " + where + ".");
@@ -1873,7 +1902,7 @@ function settingsWin() {
 function helpWin(anchor) {
   const sec = (id, title, ...kids) => h("section", { id: "aide-" + id, class: "help-doc" }, h("h3", null, title), ...kids);
   const li = (...k) => h("li", null, ...k);
-  const toc = [["sert", "À quoi sert l'appli"], ["debut", "Premiers pas"], ["jour", "Au quotidien"], ["attente", "Actions en attente"], ["pilotage", "Pilotage des délais"], ["diffuser", "Diffuser"], ["partage", "Partage"], ["questions", "Questions fréquentes"], ["news", "Quoi de neuf"]];
+  const toc = [["sert", "À quoi sert l'appli"], ["debut", "Premiers pas"], ["jour", "Au quotidien"], ["annexes", "Travaux annexes"], ["attente", "Actions en attente"], ["pilotage", "Pilotage des délais"], ["diffuser", "Diffuser"], ["partage", "Partage"], ["questions", "Questions fréquentes"], ["news", "Quoi de neuf"]];
   openWin({
     title: "Aide · mode d'emploi", size: "large",
     body: [
@@ -1899,6 +1928,10 @@ function helpWin(anchor) {
         li(h("b", null, "Relances"), " : pour chaque personne en retard, avec une action prévue aujourd'hui ou un objectif du Top 3 menacé, un message prêt et signé de ton prénom. Teams et Mail ouvrent le message ; rien n'est envoyé sans ton clic."),
         li(h("b", null, "Top 3 menacé"), " : objectif pas atteint alors que son dernier jour prévu est passé (ou sans jour prévu le vendredi)."),
         li(h("b", null, "Bilan"), " : pour la semaine affichée, les actions dont la date prévue au départ tombe dans la semaine. Tenue des délais = faites au plus tard à cette date ÷ celles dont la date est passée. « Copier le bilan » prépare un texte pour ton point d'équipe."))),
+      sec("annexes", "Travaux annexes", h("ul", null,
+        li(h("b", null, "Ligne « Travaux annexes »"), " : en bas du tableau, sous le dernier jour, et dans « Ma semaine ». Pour les petites tâches à faire quand on a du temps : « + Tâche annexe », puis Entrée."),
+        li(h("b", null, "Sans date"), " : elles restent d'une semaine à l'autre jusqu'à ce qu'elles soient cochées, ne passent jamais en retard et ne comptent ni comme priorité du jour ni dans le Pilotage. Cochées, elles restent visibles barrées la semaine où elles ont été faites."),
+        li(h("b", null, "Planifier"), " : glisse une tâche annexe sur un jour (ou ouvre-la et choisis une semaine) : elle devient une action datée. À l'inverse, glisse une action sur la ligne « Travaux annexes » pour l'y ranger."))),
       sec("attente", "Actions en attente", h("ul", null,
         li("Bouton « En attente » : la liste de toutes les actions non faites, en retard d'abord."),
         li("Glisse une action sur un jour du tableau ou d'un onglet pour la planifier ; dépose-la sur « Plus tard » pour la garder sans date."),
